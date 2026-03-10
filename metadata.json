@@ -1,0 +1,5 @@
+{
+  "name": "Trade Signal Bot",
+  "description": "Pocket Option trade signal bot with user authentication, admin panel, and signal generation.",
+  "requestFramePermissions": []
+}
