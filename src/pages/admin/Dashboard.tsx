@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Shield, Users, Activity, Key, Settings, LogOut, ExternalLink } from 'lucide-react';
+import { Shield, Users, Activity, Key, Settings, LogOut, ExternalLink, MessageSquare } from 'lucide-react';
+import Notifications from '../../components/Notifications';
 
 export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState('browser');
@@ -9,6 +10,8 @@ export default function AdminDashboard() {
   const [codes, setCodes] = useState([]);
   const [settings, setSettings] = useState([]);
   const [newCode, setNewCode] = useState('');
+  const [broadcastMessage, setBroadcastMessage] = useState('');
+  const [sendingBroadcast, setSendingBroadcast] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -49,6 +52,25 @@ export default function AdminDashboard() {
     navigate('/meta');
   };
 
+  const handleBroadcast = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!broadcastMessage.trim()) return;
+    
+    setSendingBroadcast(true);
+    try {
+      await fetch('/api/admin/broadcast', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: broadcastMessage })
+      });
+      setBroadcastMessage('');
+      alert('Broadcast message sent successfully!');
+    } catch (err) {
+      alert('Failed to send broadcast');
+    }
+    setSendingBroadcast(false);
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-300 flex">
       {/* Sidebar */}
@@ -70,6 +92,9 @@ export default function AdminDashboard() {
           <button onClick={() => setActiveTab('codes')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'codes' ? 'bg-indigo-500/10 text-indigo-400' : 'hover:bg-slate-800'}`}>
             <Key className="w-5 h-5" /> Access Codes
           </button>
+          <button onClick={() => setActiveTab('broadcast')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'broadcast' ? 'bg-indigo-500/10 text-indigo-400' : 'hover:bg-slate-800'}`}>
+            <MessageSquare className="w-5 h-5" /> Broadcast
+          </button>
           <button onClick={() => setActiveTab('settings')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'settings' ? 'bg-indigo-500/10 text-indigo-400' : 'hover:bg-slate-800'}`}>
             <Settings className="w-5 h-5" /> Settings
           </button>
@@ -83,8 +108,9 @@ export default function AdminDashboard() {
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col h-screen overflow-hidden">
-        <header className="bg-slate-900 border-b border-slate-800 p-6">
+        <header className="bg-slate-900 border-b border-slate-800 p-6 flex justify-between items-center">
           <h2 className="text-2xl font-semibold text-white capitalize">{activeTab.replace('-', ' ')}</h2>
+          <Notifications user={{ role: 'admin' }} />
         </header>
         
         <div className="flex-1 overflow-auto p-6">
@@ -106,6 +132,7 @@ export default function AdminDashboard() {
                     <th className="p-4">ID</th>
                     <th className="p-4">Username</th>
                     <th className="p-4">Role</th>
+                    <th className="p-4">Pocket Option ID</th>
                     <th className="p-4">IP Address</th>
                     <th className="p-4">Joined</th>
                   </tr>
@@ -120,6 +147,7 @@ export default function AdminDashboard() {
                           {u.role}
                         </span>
                       </td>
+                      <td className="p-4 font-mono text-emerald-400">{u.pocket_option_id || 'Not Linked'}</td>
                       <td className="p-4 font-mono text-slate-400">{u.ip_address || 'N/A'}</td>
                       <td className="p-4 text-slate-400">{new Date(u.created_at).toLocaleString()}</td>
                     </tr>
@@ -199,6 +227,35 @@ export default function AdminDashboard() {
                   </tbody>
                 </table>
               </div>
+            </div>
+          )}
+
+          {activeTab === 'broadcast' && (
+            <div className="max-w-2xl bg-slate-900 rounded-xl border border-slate-800 p-6">
+              <h3 className="text-lg font-semibold text-white mb-4">Send Broadcast Message</h3>
+              <p className="text-slate-400 text-sm mb-6">
+                Send a real-time notification to all connected users. Offline users will see this message the next time they log in.
+              </p>
+              <form onSubmit={handleBroadcast} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-400 mb-2">Message Content</label>
+                  <textarea
+                    value={broadcastMessage}
+                    onChange={(e) => setBroadcastMessage(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg p-4 text-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors min-h-[120px]"
+                    placeholder="e.g., Market alert: BTC/USD signal updated. Check your dashboard."
+                    required
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={sendingBroadcast}
+                  className="bg-indigo-500 hover:bg-indigo-600 disabled:bg-slate-700 disabled:cursor-not-allowed text-white px-6 py-3 rounded-lg font-medium transition-colors flex items-center gap-2"
+                >
+                  <MessageSquare className="w-5 h-5" />
+                  {sendingBroadcast ? 'Sending...' : 'Send Broadcast'}
+                </button>
+              </form>
             </div>
           )}
 

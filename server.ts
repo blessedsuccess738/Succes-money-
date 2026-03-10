@@ -58,7 +58,24 @@ db.exec(`
     key TEXT PRIMARY KEY,
     value TEXT
   );
+
+  CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    title TEXT,
+    message TEXT,
+    type TEXT,
+    is_read BOOLEAN DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(user_id) REFERENCES users(id)
+  );
 `);
+
+try {
+  db.exec(`ALTER TABLE users ADD COLUMN pocket_option_id TEXT;`);
+} catch (e) {
+  // Column might already exist
+}
 
 // Seed Admin User and Settings
 const adminExists = db.prepare('SELECT * FROM users WHERE role = ?').get('admin');
@@ -122,8 +139,13 @@ app.post('/api/auth/signup', (req, res) => {
       db.prepare('UPDATE access_codes SET is_used = 1, used_by = ? WHERE id = ?').run(result.lastInsertRowid, codeRecord.id);
     }
 
-    // TODO: Notify admin via Telegram/Discord (Placeholder)
+    // Notify admin via Telegram/Discord (Placeholder)
     console.log(`[ALERT] New user signed up: ${username} (Role: ${role})`);
+    
+    // Create admin notification
+    const adminMsg = `New user signup: ${username}`;
+    const notifResult = db.prepare('INSERT INTO notifications (title, message, type) VALUES (?, ?, ?)').run('New User', adminMsg, 'admin');
+    io.emit('admin_notification', { id: notifResult.lastInsertRowid, title: 'New User', message: adminMsg, type: 'admin', created_at: new Date().toISOString() });
 
     res.json({ success: true, message: 'User created successfully' });
   } catch (err: any) {
@@ -150,7 +172,31 @@ app.post('/api/auth/logout', (req, res) => {
 });
 
 app.get('/api/auth/me', authenticateToken, (req: any, res) => {
-  res.json({ user: req.user });
+  const user = db.prepare('SELECT id, username, role, pocket_option_id as pocketOptionId FROM users WHERE id = ?').get(req.user.id);
+  res.json({ user });
+});
+
+app.post('/api/auth/pocket-option', authenticateToken, (req: any, res) => {
+  const { pocketOptionId } = req.body;
+  if (!pocketOptionId) return res.status(400).json({ error: 'Pocket Option ID is required' });
+
+  try {
+    db.prepare('UPDATE users SET pocket_option_id = ? WHERE id = ?').run(pocketOptionId, req.user.id);
+    
+    // Notify user
+    const userMsg = `Your Pocket Option ID (${pocketOptionId}) has been verified.`;
+    const notifResult = db.prepare('INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)').run(req.user.id, 'Verification Complete', userMsg, 'user');
+    io.to(`user_${req.user.id}`).emit('user_notification', { id: notifResult.lastInsertRowid, title: 'Verification Complete', message: userMsg, type: 'user', created_at: new Date().toISOString() });
+    
+    // Notify admin
+    const adminMsg = `User ${req.user.username} verified Pocket Option ID: ${pocketOptionId}`;
+    const adminNotifResult = db.prepare('INSERT INTO notifications (title, message, type) VALUES (?, ?, ?)').run('ID Verified', adminMsg, 'admin');
+    io.emit('admin_notification', { id: adminNotifResult.lastInsertRowid, title: 'ID Verified', message: adminMsg, type: 'admin', created_at: new Date().toISOString() });
+
+    res.json({ success: true, message: 'Pocket Option ID linked successfully' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to link account' });
+  }
 });
 
 // User Routes
@@ -185,12 +231,42 @@ app.post('/api/signals/generate', authenticateToken, (req: any, res) => {
 
   io.emit('new_signal', newSignal);
   
+  // Notify user
+  const userMsg = `New signal generated for ${asset} (${timeframe}): ${signal}`;
+  const notifResult = db.prepare('INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)').run(req.user.id, 'New Signal', userMsg, 'user');
+  io.to(`user_${req.user.id}`).emit('user_notification', { id: notifResult.lastInsertRowid, title: 'New Signal', message: userMsg, type: 'user', created_at: new Date().toISOString() });
+
+  // Notify admin
+  const adminMsg = `User ${req.user.username} requested signal for ${asset}`;
+  const adminNotifResult = db.prepare('INSERT INTO notifications (title, message, type) VALUES (?, ?, ?)').run('Signal Request', adminMsg, 'admin');
+  io.emit('admin_notification', { id: adminNotifResult.lastInsertRowid, title: 'Signal Request', message: adminMsg, type: 'admin', created_at: new Date().toISOString() });
+  
   res.json(newSignal);
+});
+
+// Notifications Routes
+app.get('/api/notifications', authenticateToken, (req: any, res) => {
+  let notifications;
+  if (req.user.role === 'admin') {
+    notifications = db.prepare('SELECT * FROM notifications WHERE type = ? OR type = ? ORDER BY created_at DESC LIMIT 50').all('admin', 'broadcast');
+  } else {
+    notifications = db.prepare('SELECT * FROM notifications WHERE (user_id = ? AND type = ?) OR type = ? ORDER BY created_at DESC LIMIT 50').all(req.user.id, 'user', 'broadcast');
+  }
+  res.json(notifications);
+});
+
+app.post('/api/notifications/read', authenticateToken, (req: any, res) => {
+  if (req.user.role === 'admin') {
+    db.prepare('UPDATE notifications SET is_read = 1 WHERE type = ?').run('admin');
+  } else {
+    db.prepare('UPDATE notifications SET is_read = 1 WHERE user_id = ?').run(req.user.id);
+  }
+  res.json({ success: true });
 });
 
 // Admin Routes
 app.get('/api/admin/users', authenticateToken, requireAdmin, (req, res) => {
-  const users = db.prepare('SELECT id, username, role, ip_address, created_at FROM users').all();
+  const users = db.prepare('SELECT id, username, role, ip_address, created_at, pocket_option_id FROM users').all();
   res.json(users);
 });
 
@@ -202,6 +278,18 @@ app.get('/api/admin/signals', authenticateToken, requireAdmin, (req, res) => {
     ORDER BY s.created_at DESC
   `).all();
   res.json(signals);
+});
+
+app.post('/api/admin/broadcast', authenticateToken, requireAdmin, (req, res) => {
+  const { message } = req.body;
+  if (!message) return res.status(400).json({ error: 'Message is required' });
+
+  const notifResult = db.prepare('INSERT INTO notifications (title, message, type) VALUES (?, ?, ?)').run('Broadcast Message', message, 'broadcast');
+  const broadcastNotif = { id: notifResult.lastInsertRowid, title: 'Broadcast Message', message, type: 'broadcast', created_at: new Date().toISOString() };
+  
+  io.emit('broadcast_notification', broadcastNotif);
+  
+  res.json({ success: true });
 });
 
 app.get('/api/admin/codes', authenticateToken, requireAdmin, (req, res) => {
@@ -228,6 +316,13 @@ app.post('/api/admin/settings', authenticateToken, requireAdmin, (req, res) => {
   const { key, value } = req.body;
   db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, value);
   res.json({ success: true });
+});
+
+// Socket.io setup
+io.on('connection', (socket) => {
+  socket.on('join_user_room', (userId) => {
+    socket.join(`user_${userId}`);
+  });
 });
 
 async function startServer() {

@@ -1,26 +1,52 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Activity, Clock, LogOut, TrendingUp, ExternalLink } from 'lucide-react';
+import { Activity, Clock, LogOut, TrendingUp, ExternalLink, ChevronDown } from 'lucide-react';
 import { io } from 'socket.io-client';
+import TradeView from '../../components/TradeView';
+import Notifications from '../../components/Notifications';
 
-const ASSETS = ['BTC/USD', 'ETH/USD', 'LTC/USD', 'EUR/USD', 'GBP/USD'];
-const TIMEFRAMES = ['1min', '5min', '15min'];
+const ASSETS = [
+  { name: 'EUR/USD', flags: '🇪🇺 🇺🇸' },
+  { name: 'GBP/USD', flags: '🇬🇧 🇺🇸' },
+  { name: 'USD/JPY', flags: '🇺🇸 🇯🇵' },
+  { name: 'AUD/USD', flags: '🇦🇺 🇺🇸' },
+  { name: 'USD/CAD', flags: '🇺🇸 🇨🇦' },
+  { name: 'EUR/GBP', flags: '🇪🇺 🇬🇧' },
+  { name: 'BTC/USD', flags: '₿ 🇺🇸' },
+  { name: 'EUR/USD OTC', flags: '🇪🇺 🇺🇸' },
+  { name: 'GBP/USD OTC', flags: '🇬🇧 🇺🇸' },
+  { name: 'USD/JPY OTC', flags: '🇺🇸 🇯🇵' },
+  { name: 'AUD/USD OTC', flags: '🇦🇺 🇺🇸' },
+  { name: 'USD/CAD OTC', flags: '🇺🇸 🇨🇦' },
+  { name: 'EUR/GBP OTC', flags: '🇪🇺 🇬🇧' },
+  { name: 'BTC/USD OTC', flags: '₿ 🇺🇸' }
+];
+const TIMEFRAMES = ['5s', '10s', '15s', '30s', '1m', '3m', '5m'];
 
 export default function UserDashboard() {
-  const [asset, setAsset] = useState(ASSETS[0]);
+  const [asset, setAsset] = useState(ASSETS[0].name);
   const [timeframe, setTimeframe] = useState(TIMEFRAMES[0]);
   const [signal, setSignal] = useState<any>(null);
   const [liveSignals, setLiveSignals] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [user, setUser] = useState<{ username: string } | null>(null);
+  const [showAssetDropdown, setShowAssetDropdown] = useState(false);
+  const [showTimeframeDropdown, setShowTimeframeDropdown] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
     fetch('/api/auth/me')
       .then(res => res.json())
       .then(data => {
-        if (data.user) setUser(data.user);
-        else navigate('/login');
+        if (data.user) {
+          if (!data.user.pocketOptionId) {
+            navigate('/connect-broker');
+          } else {
+            setUser(data.user);
+          }
+        } else {
+          navigate('/login');
+        }
       })
       .catch(() => navigate('/login'));
       
@@ -76,7 +102,14 @@ export default function UserDashboard() {
             <ExternalLink className="w-4 h-4" />
             Trade on Pocket Option
           </a>
-          <span className="text-sm text-slate-400">Welcome, {user.username}</span>
+          
+          <Notifications user={user} />
+          
+          <div className="hidden sm:flex flex-col items-end mr-2">
+            <span className="text-sm font-medium text-white">{user.username}</span>
+            <span className="text-xs text-slate-400 font-mono">ID: {user.pocketOptionId}</span>
+          </div>
+          
           <button onClick={handleLogout} className="text-slate-400 hover:text-white transition-colors">
             <LogOut className="w-5 h-5" />
           </button>
@@ -84,40 +117,79 @@ export default function UserDashboard() {
       </header>
 
       <main className="max-w-6xl mx-auto p-6 mt-8">
+        <TradeView asset={asset} timeframe={timeframe} signal={signal} />
+
         <div className="grid lg:grid-cols-3 gap-8">
           <div className="lg:col-span-2 space-y-8">
             <div className="bg-slate-800 p-6 rounded-2xl shadow-lg border border-slate-700">
               <h2 className="text-2xl font-semibold text-white mb-6">Get New Signal</h2>
               
               <div className="space-y-6">
-                <div>
-                  <label className="block text-sm font-medium text-slate-400 mb-2">Select Asset</label>
-                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                    {ASSETS.map(a => (
-                      <button
-                        key={a}
-                        onClick={() => setAsset(a)}
-                        className={`py-2 px-4 rounded-lg border transition-all ${asset === a ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400' : 'bg-slate-700 border-slate-600 text-slate-300 hover:border-slate-500'}`}
-                      >
-                        {a}
-                      </button>
-                    ))}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Asset Dropdown */}
+                  <div className="relative">
+                    <label className="block text-sm font-medium text-slate-400 mb-2">Select Asset</label>
+                    <button
+                      onClick={() => { setShowAssetDropdown(!showAssetDropdown); setShowTimeframeDropdown(false); }}
+                      className="w-full bg-slate-700 border border-slate-600 rounded-lg p-3 flex items-center justify-between text-white hover:border-slate-500 transition-colors"
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="text-xl tracking-widest">{ASSETS.find(a => a.name === asset)?.flags}</span>
+                        <span className="font-medium text-lg">{asset}</span>
+                      </div>
+                      <ChevronDown className={`w-5 h-5 transition-transform ${showAssetDropdown ? 'rotate-180' : ''}`} />
+                    </button>
+                    
+                    {showAssetDropdown && (
+                      <>
+                        <div className="fixed inset-0 z-40" onClick={() => setShowAssetDropdown(false)} />
+                        <div className="absolute top-[80px] left-0 right-0 bg-slate-800 border border-slate-600 rounded-lg shadow-xl z-50 max-h-64 overflow-y-auto custom-scrollbar">
+                          {ASSETS.map(a => (
+                            <button
+                              key={a.name}
+                              onClick={() => { setAsset(a.name); setShowAssetDropdown(false); }}
+                              className={`w-full text-left p-3 flex items-center gap-3 hover:bg-slate-700 transition-colors border-b border-slate-700/50 last:border-0 ${asset === a.name ? 'bg-emerald-500/10 text-emerald-400' : 'text-slate-200'}`}
+                            >
+                              <span className="text-xl tracking-widest">{a.flags}</span>
+                              <span className="font-medium">{a.name}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
                   </div>
-                </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-400 mb-2">Timeframe</label>
-                  <div className="flex gap-3">
-                    {TIMEFRAMES.map(t => (
-                      <button
-                        key={t}
-                        onClick={() => setTimeframe(t)}
-                        className={`flex-1 py-2 rounded-lg border flex items-center justify-center gap-2 transition-all ${timeframe === t ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400' : 'bg-slate-700 border-slate-600 text-slate-300 hover:border-slate-500'}`}
-                      >
-                        <Clock className="w-4 h-4" />
-                        {t}
-                      </button>
-                    ))}
+                  {/* Timeframe Dropdown */}
+                  <div className="relative">
+                    <label className="block text-sm font-medium text-slate-400 mb-2">Timeframe</label>
+                    <button
+                      onClick={() => { setShowTimeframeDropdown(!showTimeframeDropdown); setShowAssetDropdown(false); }}
+                      className="w-full bg-slate-700 border border-slate-600 rounded-lg p-3 flex items-center justify-between text-white hover:border-slate-500 transition-colors"
+                    >
+                      <div className="flex items-center gap-3">
+                        <Clock className="w-5 h-5 text-emerald-400" />
+                        <span className="font-medium text-lg">{timeframe}</span>
+                      </div>
+                      <ChevronDown className={`w-5 h-5 transition-transform ${showTimeframeDropdown ? 'rotate-180' : ''}`} />
+                    </button>
+
+                    {showTimeframeDropdown && (
+                      <>
+                        <div className="fixed inset-0 z-40" onClick={() => setShowTimeframeDropdown(false)} />
+                        <div className="absolute top-[80px] left-0 right-0 bg-slate-800 border border-slate-600 rounded-lg shadow-xl z-50 max-h-64 overflow-y-auto custom-scrollbar">
+                          {TIMEFRAMES.map(t => (
+                            <button
+                              key={t}
+                              onClick={() => { setTimeframe(t); setShowTimeframeDropdown(false); }}
+                              className={`w-full text-left p-3 flex items-center gap-3 hover:bg-slate-700 transition-colors border-b border-slate-700/50 last:border-0 ${timeframe === t ? 'bg-emerald-500/10 text-emerald-400' : 'text-slate-200'}`}
+                            >
+                              <Clock className="w-4 h-4 opacity-50" />
+                              <span className="font-medium">{t}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
 
