@@ -41,8 +41,8 @@ export default function VerifyCode() {
       } else {
         setError(data.error || 'Invalid access code');
       }
-    } catch (err) {
-      setError('Network error. Please try again.');
+    } catch (err: any) {
+      setError(err.message || 'Network error. Please try again.');
     } finally {
       setLoading(false);
     }

@@ -26,8 +26,8 @@ export default function UserSignup() {
       } else {
         setError(data.error || 'Signup failed');
       }
-    } catch (err) {
-      setError('Network error');
+    } catch (err: any) {
+      setError(err.message || 'Network error');
     }
   };
 

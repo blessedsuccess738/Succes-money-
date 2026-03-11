@@ -28,8 +28,8 @@ export default function UserLogin() {
       } else {
         setError(data.error || 'Login failed');
       }
-    } catch (err) {
-      setError('Network error');
+    } catch (err: any) {
+      setError(err.message || 'Network error');
     }
   };
 

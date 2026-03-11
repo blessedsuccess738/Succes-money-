@@ -22,8 +22,8 @@ export default function AdminLogin() {
       } else {
         setError(data.error || 'Admin access denied');
       }
-    } catch (err) {
-      setError('Network error');
+    } catch (err: any) {
+      setError(err.message || 'Network error');
     }
   };
 

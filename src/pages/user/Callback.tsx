@@ -50,8 +50,8 @@ export default function Callback() {
       } else {
         setError(data.error || 'Failed to link account');
       }
-    } catch (err) {
-      setError('Network error occurred. Please try again.');
+    } catch (err: any) {
+      setError(err.message || 'Network error occurred. Please try again.');
     } finally {
       setLoading(false);
     }

@@ -77,6 +77,12 @@ try {
   // Column might already exist
 }
 
+try {
+  db.exec(`ALTER TABLE users ADD COLUMN ip_address TEXT;`);
+} catch (e) {
+  // Column might already exist
+}
+
 // Seed Admin User and Settings
 const adminExists = db.prepare('SELECT * FROM users WHERE role = ?').get('admin');
 if (!adminExists) {
@@ -108,25 +114,25 @@ const requireAdmin = (req: any, res: any, next: any) => {
 
 // API Routes
 app.post('/api/auth/signup', (req, res) => {
-  const { username, password } = req.body;
-  if (!username || !password) {
-    return res.status(400).json({ error: 'Username and password are required' });
-  }
-  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
-
-  // Check IP limit
-  const ipCount = db.prepare('SELECT COUNT(*) as count FROM users WHERE ip_address = ?').get(ip) as { count: number };
-  if (ipCount.count >= 2) {
-    return res.status(400).json({ error: 'Maximum accounts reached for this IP' });
-  }
-
-  let role = 'user';
-
-  if (username.toLowerCase() === 'blessedsuccess738@gmail.com') {
-    role = 'admin';
-  }
-
   try {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password are required' });
+    }
+    const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+
+    // Check IP limit
+    const ipCount = db.prepare('SELECT COUNT(*) as count FROM users WHERE ip_address = ?').get(ip) as { count: number };
+    if (ipCount.count >= 2) {
+      return res.status(400).json({ error: 'Maximum accounts reached for this IP' });
+    }
+
+    let role = 'user';
+
+    if (username.toLowerCase() === 'blessedsuccess738@gmail.com') {
+      role = 'admin';
+    }
+
     const hashedPassword = bcrypt.hashSync(password, 10);
     const result = db.prepare('INSERT INTO users (username, password, role, ip_address) VALUES (?, ?, ?, ?)').run(username, hashedPassword, role, ip);
     
@@ -144,27 +150,36 @@ app.post('/api/auth/signup', (req, res) => {
 
     res.json({ success: true, role, message: 'User created successfully' });
   } catch (err: any) {
-    res.status(400).json({ error: 'Username may already exist' });
+    console.error('Signup error:', err);
+    if (err.message && err.message.includes('UNIQUE constraint failed')) {
+      return res.status(400).json({ error: 'Username already exists' });
+    }
+    res.status(500).json({ error: 'Internal server error during signup' });
   }
 });
 
 app.post('/api/auth/login', (req, res) => {
-  const { username, password } = req.body;
-  if (!username || !password) {
-    return res.status(400).json({ error: 'Username and password are required' });
-  }
-  const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username) as any;
+  try {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password are required' });
+    }
+    const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username) as any;
 
-  if (user && bcrypt.compareSync(password, user.password)) {
-    const token = jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: '24h' });
-    res.cookie('token', token, { httpOnly: true, secure: true, sameSite: 'none' });
-    
-    const codeCount = db.prepare('SELECT COUNT(*) as count FROM access_codes WHERE used_by = ?').get(user.id) as { count: number };
-    const hasAccessCode = codeCount.count > 0;
-    
-    res.json({ success: true, role: user.role, hasAccessCode });
-  } else {
-    res.status(401).json({ error: 'Invalid credentials' });
+    if (user && bcrypt.compareSync(password, user.password)) {
+      const token = jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: '24h' });
+      res.cookie('token', token, { httpOnly: true, secure: true, sameSite: 'none' });
+      
+      const codeCount = db.prepare('SELECT COUNT(*) as count FROM access_codes WHERE used_by = ?').get(user.id) as { count: number };
+      const hasAccessCode = codeCount.count > 0;
+      
+      res.json({ success: true, role: user.role, hasAccessCode });
+    } else {
+      res.status(401).json({ error: 'Invalid credentials' });
+    }
+  } catch (err: any) {
+    console.error('Login error:', err);
+    res.status(500).json({ error: 'Internal server error during login' });
   }
 });
 
