@@ -9,6 +9,7 @@ import UserSignup from './pages/user/Signup';
 import UserDashboard from './pages/user/Dashboard';
 import ConnectBroker from './pages/user/ConnectBroker';
 import Callback from './pages/user/Callback';
+import VerifyCode from './pages/user/VerifyCode';
 import AdminLogin from './pages/admin/Login';
 import AdminDashboard from './pages/admin/Dashboard';
 
@@ -19,6 +20,7 @@ export default function App() {
         {/* User Routes */}
         <Route path="/login" element={<UserLogin />} />
         <Route path="/signup" element={<UserSignup />} />
+        <Route path="/verify-code" element={<VerifyCode />} />
         <Route path="/connect-broker" element={<ConnectBroker />} />
         <Route path="/callback" element={<Callback />} />
         <Route path="/dashboard" element={<UserDashboard />} />

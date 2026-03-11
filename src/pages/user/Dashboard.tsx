@@ -39,7 +39,11 @@ export default function UserDashboard() {
       .then(res => res.json())
       .then(data => {
         if (data.user) {
-          if (!data.user.pocketOptionId) {
+          if (data.user.role === 'admin') {
+            navigate('/admin');
+          } else if (!data.user.hasAccessCode) {
+            navigate('/verify-code');
+          } else if (!data.user.pocketOptionId) {
             navigate('/connect-broker');
           } else {
             setUser(data.user);

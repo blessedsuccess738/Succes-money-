@@ -108,8 +108,11 @@ const requireAdmin = (req: any, res: any, next: any) => {
 
 // API Routes
 app.post('/api/auth/signup', (req, res) => {
-  const { username, password, accessCode } = req.body;
-  const ip = req.ip || req.connection.remoteAddress;
+  const { username, password } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username and password are required' });
+  }
+  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
 
   // Check IP limit
   const ipCount = db.prepare('SELECT COUNT(*) as count FROM users WHERE ip_address = ?').get(ip) as { count: number };
@@ -118,27 +121,15 @@ app.post('/api/auth/signup', (req, res) => {
   }
 
   let role = 'user';
-  let codeRecord = null;
 
   if (username.toLowerCase() === 'blessedsuccess738@gmail.com') {
     role = 'admin';
-  } else {
-    // Verify access code
-    codeRecord = db.prepare('SELECT * FROM access_codes WHERE code = ? AND is_used = 0').get(accessCode) as any;
-    if (!codeRecord) {
-      return res.status(400).json({ error: 'Invalid or already used access code' });
-    }
   }
 
   try {
     const hashedPassword = bcrypt.hashSync(password, 10);
     const result = db.prepare('INSERT INTO users (username, password, role, ip_address) VALUES (?, ?, ?, ?)').run(username, hashedPassword, role, ip);
     
-    if (codeRecord) {
-      // Mark code as used
-      db.prepare('UPDATE access_codes SET is_used = 1, used_by = ? WHERE id = ?').run(result.lastInsertRowid, codeRecord.id);
-    }
-
     // Notify admin via Telegram/Discord (Placeholder)
     console.log(`[ALERT] New user signed up: ${username} (Role: ${role})`);
     
@@ -147,7 +138,11 @@ app.post('/api/auth/signup', (req, res) => {
     const notifResult = db.prepare('INSERT INTO notifications (title, message, type) VALUES (?, ?, ?)').run('New User', adminMsg, 'admin');
     io.emit('admin_notification', { id: notifResult.lastInsertRowid, title: 'New User', message: adminMsg, type: 'admin', created_at: new Date().toISOString() });
 
-    res.json({ success: true, message: 'User created successfully' });
+    // Auto-login after signup
+    const token = jwt.sign({ id: result.lastInsertRowid, username, role }, JWT_SECRET, { expiresIn: '24h' });
+    res.cookie('token', token, { httpOnly: true, secure: true, sameSite: 'none' });
+
+    res.json({ success: true, role, message: 'User created successfully' });
   } catch (err: any) {
     res.status(400).json({ error: 'Username may already exist' });
   }
@@ -155,12 +150,19 @@ app.post('/api/auth/signup', (req, res) => {
 
 app.post('/api/auth/login', (req, res) => {
   const { username, password } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username and password are required' });
+  }
   const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username) as any;
 
   if (user && bcrypt.compareSync(password, user.password)) {
     const token = jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: '24h' });
-    res.cookie('token', token, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'none' });
-    res.json({ success: true, role: user.role });
+    res.cookie('token', token, { httpOnly: true, secure: true, sameSite: 'none' });
+    
+    const codeCount = db.prepare('SELECT COUNT(*) as count FROM access_codes WHERE used_by = ?').get(user.id) as { count: number };
+    const hasAccessCode = codeCount.count > 0;
+    
+    res.json({ success: true, role: user.role, hasAccessCode });
   } else {
     res.status(401).json({ error: 'Invalid credentials' });
   }
@@ -172,8 +174,30 @@ app.post('/api/auth/logout', (req, res) => {
 });
 
 app.get('/api/auth/me', authenticateToken, (req: any, res) => {
-  const user = db.prepare('SELECT id, username, role, pocket_option_id as pocketOptionId FROM users WHERE id = ?').get(req.user.id);
+  const user = db.prepare('SELECT id, username, role, pocket_option_id as pocketOptionId FROM users WHERE id = ?').get(req.user.id) as any;
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  
+  const codeCount = db.prepare('SELECT COUNT(*) as count FROM access_codes WHERE used_by = ?').get(req.user.id) as { count: number };
+  user.hasAccessCode = codeCount.count > 0;
+  
   res.json({ user });
+});
+
+app.post('/api/auth/verify-code', authenticateToken, (req: any, res) => {
+  const { accessCode } = req.body;
+  if (!accessCode) return res.status(400).json({ error: 'Access code is required' });
+
+  const codeRecord = db.prepare('SELECT * FROM access_codes WHERE code = ? AND is_used = 0').get(accessCode) as any;
+  if (!codeRecord) {
+    return res.status(400).json({ error: 'Invalid or already used access code' });
+  }
+
+  try {
+    db.prepare('UPDATE access_codes SET is_used = 1, used_by = ? WHERE id = ?').run(req.user.id, codeRecord.id);
+    res.json({ success: true, message: 'Access code verified successfully' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to verify access code' });
+  }
 });
 
 app.post('/api/auth/pocket-option', authenticateToken, (req: any, res) => {

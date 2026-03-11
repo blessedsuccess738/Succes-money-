@@ -5,7 +5,6 @@ import { Lock, User, Key } from 'lucide-react';
 export default function UserSignup() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [accessCode, setAccessCode] = useState('');
   const [error, setError] = useState('');
   const navigate = useNavigate();
 
@@ -15,11 +14,15 @@ export default function UserSignup() {
       const res = await fetch('/api/auth/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password, accessCode }),
+        body: JSON.stringify({ username, password }),
       });
       const data = await res.json();
       if (data.success) {
-        navigate('/login');
+        if (data.role === 'admin') {
+          navigate('/admin');
+        } else {
+          navigate('/verify-code');
+        }
       } else {
         setError(data.error || 'Signup failed');
       }
@@ -34,19 +37,6 @@ export default function UserSignup() {
         <h2 className="text-3xl font-bold mb-6 text-center text-emerald-400">Create Account</h2>
         {error && <div className="bg-red-500/20 text-red-400 p-3 rounded-lg mb-4 text-sm text-center">{error}</div>}
         <form onSubmit={handleSignup} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-slate-400 mb-1">Access Code</label>
-            <div className="relative">
-              <Key className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" />
-              <input
-                type="text"
-                value={accessCode}
-                onChange={(e) => setAccessCode(e.target.value)}
-                className="w-full bg-slate-700 border border-slate-600 rounded-lg py-2 pl-10 pr-4 focus:outline-none focus:border-emerald-500 transition-colors"
-                placeholder="Required (unless admin email)"
-              />
-            </div>
-          </div>
           <div>
             <label className="block text-sm font-medium text-slate-400 mb-1">Username or Email</label>
             <div className="relative">

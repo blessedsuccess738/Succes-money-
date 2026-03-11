@@ -1,4 +1,4 @@
-import { useState, FormEvent } from 'react';
+import { useState, useEffect, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { CheckCircle2, AlertCircle } from 'lucide-react';
 
@@ -7,6 +7,23 @@ export default function Callback() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    fetch('/api/auth/me')
+      .then(res => res.json())
+      .then(data => {
+        if (!data.user) {
+          navigate('/login');
+        } else if (data.user.role === 'admin') {
+          navigate('/admin');
+        } else if (!data.user.hasAccessCode) {
+          navigate('/verify-code');
+        } else if (data.user.pocketOptionId) {
+          navigate('/dashboard');
+        }
+      })
+      .catch(() => navigate('/login'));
+  }, [navigate]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();

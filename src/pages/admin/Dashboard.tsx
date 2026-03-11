@@ -15,8 +15,17 @@ export default function AdminDashboard() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    fetchData();
-  }, [activeTab]);
+    fetch('/api/auth/me')
+      .then(res => res.json())
+      .then(data => {
+        if (!data.user || data.user.role !== 'admin') {
+          navigate('/meta');
+        } else {
+          fetchData();
+        }
+      })
+      .catch(() => navigate('/meta'));
+  }, [activeTab, navigate]);
 
   const fetchData = async () => {
     try {

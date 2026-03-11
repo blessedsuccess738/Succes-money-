@@ -1,6 +1,27 @@
+import { useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { ExternalLink, ShieldCheck } from 'lucide-react';
 
 export default function ConnectBroker() {
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    fetch('/api/auth/me')
+      .then(res => res.json())
+      .then(data => {
+        if (!data.user) {
+          navigate('/login');
+        } else if (data.user.role === 'admin') {
+          navigate('/admin');
+        } else if (!data.user.hasAccessCode) {
+          navigate('/verify-code');
+        } else if (data.user.pocketOptionId) {
+          navigate('/dashboard');
+        }
+      })
+      .catch(() => navigate('/login'));
+  }, [navigate]);
+
   const handleConnect = () => {
     // Redirect to Pocket Option with callback URL
     const callbackUrl = encodeURIComponent(`${window.location.origin}/callback`);

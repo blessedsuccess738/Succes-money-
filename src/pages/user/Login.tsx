@@ -20,6 +20,8 @@ export default function UserLogin() {
       if (data.success) {
         if (data.role === 'admin') {
           navigate('/admin');
+        } else if (!data.hasAccessCode) {
+          navigate('/verify-code');
         } else {
           navigate('/dashboard');
         }
