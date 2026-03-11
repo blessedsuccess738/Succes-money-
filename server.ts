@@ -23,6 +23,10 @@ const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_key_change_me_in_prod
 app.use(express.json());
 app.use(cookieParser());
 
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', time: new Date().toISOString() });
+});
+
 // Database Setup
 const db = new Database('database.db');
 
@@ -363,6 +367,8 @@ io.on('connection', (socket) => {
     socket.join(`user_${userId}`);
   });
 });
+
+export default app;
 
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {

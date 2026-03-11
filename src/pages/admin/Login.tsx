@@ -16,6 +16,12 @@ export default function AdminLogin() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
       });
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text.includes('<!DOCTYPE') ? `Server returned HTML (404/500). Check if backend is running.` : text || `Error ${res.status}`);
+      }
+
       const data = await res.json();
       if (data.success && data.role === 'admin') {
         navigate('/admin');
