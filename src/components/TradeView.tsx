@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { TrendingUp, TrendingDown, Clock } from 'lucide-react';
 
 interface TradeViewProps {
@@ -7,12 +7,52 @@ interface TradeViewProps {
   signal: any;
 }
 
+declare global {
+  interface Window {
+    TradingView: any;
+  }
+}
+
 export default function TradeView({ asset, timeframe, signal }: TradeViewProps) {
   const [price, setPrice] = useState(1.05432);
   const [direction, setDirection] = useState<'up' | 'down'>('up');
   const [countdown, setCountdown] = useState<number | null>(null);
+  const container = useRef<HTMLDivElement>(null);
 
-  // Simulate live price updates
+  useEffect(() => {
+    const script = document.createElement('script');
+    script.src = 'https://s3.tradingview.com/tv.js';
+    script.async = true;
+    script.onload = () => {
+      if (container.current) {
+        new window.TradingView.widget({
+          autosize: true,
+          symbol: asset.replace(' OTC', '').replace('/', ''),
+          interval: timeframe.includes('s') ? '1' : timeframe.replace('m', ''),
+          timezone: 'Etc/UTC',
+          theme: 'dark',
+          style: '1',
+          locale: 'en',
+          toolbar_bg: '#f1f3f6',
+          enable_publishing: false,
+          hide_side_toolbar: false,
+          allow_symbol_change: true,
+          container_id: container.current.id,
+          backgroundColor: 'rgba(15, 23, 42, 1)',
+          gridColor: 'rgba(30, 41, 59, 1)',
+        });
+      }
+    };
+    document.head.appendChild(script);
+
+    return () => {
+      if (script.parentNode) {
+        document.head.removeChild(script);
+      }
+    };
+  }, [asset, timeframe]);
+
+  // Simulate live price updates (keeping for the UI display)
   useEffect(() => {
     const interval = setInterval(() => {
       setPrice(prev => {
@@ -42,62 +82,69 @@ export default function TradeView({ asset, timeframe, signal }: TradeViewProps) 
   }, [countdown]);
 
   return (
-    <div className="bg-slate-800 rounded-2xl p-6 shadow-xl border border-slate-700 relative overflow-hidden mb-8">
-      {/* Background Chart Simulation */}
-      <div className="absolute inset-0 opacity-10 pointer-events-none">
-        <svg className="w-full h-full" preserveAspectRatio="none" viewBox="0 0 100 100">
-          <path d="M0 100 Q 25 50 50 75 T 100 25 L 100 100 Z" fill="currentColor" className="text-emerald-500" />
-        </svg>
-      </div>
-
-      <div className="relative z-10 flex flex-col md:flex-row items-center justify-between gap-6">
-        {/* Asset Info */}
-        <div className="flex items-center gap-4">
-          <div className="w-12 h-12 bg-slate-700 rounded-xl flex items-center justify-center text-2xl shadow-inner">
-            {asset.includes('EUR') ? '🇪🇺' : asset.includes('GBP') ? '🇬🇧' : asset.includes('BTC') ? '₿' : '🇺🇸'}
-          </div>
-          <div>
-            <h3 className="text-xl font-bold text-white tracking-wide">{asset}</h3>
-            <div className="flex items-center gap-2 mt-1">
-              <span className={`text-2xl font-mono font-semibold ${direction === 'up' ? 'text-emerald-400' : 'text-rose-400'}`}>
-                {price.toFixed(5)}
-              </span>
-              {direction === 'up' ? (
-                <TrendingUp className="w-5 h-5 text-emerald-400" />
-              ) : (
-                <TrendingDown className="w-5 h-5 text-rose-400" />
-              )}
-            </div>
-          </div>
+    <div className="space-y-8 mb-8">
+      <div className="bg-slate-800 rounded-2xl p-6 shadow-xl border border-slate-700 relative overflow-hidden">
+        {/* Background Chart Simulation */}
+        <div className="absolute inset-0 opacity-10 pointer-events-none">
+          <svg className="w-full h-full" preserveAspectRatio="none" viewBox="0 0 100 100">
+            <path d="M0 100 Q 25 50 50 75 T 100 25 L 100 100 Z" fill="currentColor" className="text-emerald-500" />
+          </svg>
         </div>
 
-        {/* Signal Overlay */}
-        {signal && countdown !== null && (
-          <div className="flex-1 flex justify-center">
-            <div className={`px-8 py-4 rounded-2xl border-2 flex items-center gap-4 shadow-2xl animate-in fade-in zoom-in duration-300 ${
-              signal.signal === 'Buy' 
-                ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400 shadow-emerald-500/20' 
-                : 'bg-rose-500/20 border-rose-500 text-rose-400 shadow-rose-500/20'
-            }`}>
-              {signal.signal === 'Buy' ? <TrendingUp className="w-8 h-8" /> : <TrendingDown className="w-8 h-8" />}
-              <div>
-                <div className="text-2xl font-black uppercase tracking-widest">{signal.signal}</div>
-                <div className="text-sm font-medium opacity-80 flex items-center gap-1 mt-1">
-                  <Clock className="w-4 h-4" />
-                  {countdown}s remaining
-                </div>
+        <div className="relative z-10 flex flex-col md:flex-row items-center justify-between gap-6">
+          {/* Asset Info */}
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-slate-700 rounded-xl flex items-center justify-center text-2xl shadow-inner">
+              {asset.includes('EUR') ? '🇪🇺' : asset.includes('GBP') ? '🇬🇧' : asset.includes('BTC') ? '₿' : '🇺🇸'}
+            </div>
+            <div>
+              <h3 className="text-xl font-bold text-white tracking-wide">{asset}</h3>
+              <div className="flex items-center gap-2 mt-1">
+                <span className={`text-2xl font-mono font-semibold ${direction === 'up' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {price.toFixed(5)}
+                </span>
+                {direction === 'up' ? (
+                  <TrendingUp className="w-5 h-5 text-emerald-400" />
+                ) : (
+                  <TrendingDown className="w-5 h-5 text-rose-400" />
+                )}
               </div>
             </div>
           </div>
-        )}
 
-        {/* Timeframe Info */}
-        <div className="text-right hidden md:block">
-          <div className="text-sm text-slate-400 font-medium uppercase tracking-wider mb-1">Timeframe</div>
-          <div className="text-lg font-bold text-white bg-slate-700/50 px-4 py-2 rounded-lg border border-slate-600">
-            {timeframe}
+          {/* Signal Overlay */}
+          {signal && countdown !== null && (
+            <div className="flex-1 flex justify-center">
+              <div className={`px-8 py-4 rounded-2xl border-2 flex items-center gap-4 shadow-2xl animate-in fade-in zoom-in duration-300 ${
+                signal.signal === 'Buy' 
+                  ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400 shadow-emerald-500/20' 
+                  : 'bg-rose-500/20 border-rose-500 text-rose-400 shadow-rose-500/20'
+              }`}>
+                {signal.signal === 'Buy' ? <TrendingUp className="w-8 h-8" /> : <TrendingDown className="w-8 h-8" />}
+                <div>
+                  <div className="text-2xl font-black uppercase tracking-widest">{signal.signal}</div>
+                  <div className="text-sm font-medium opacity-80 flex items-center gap-1 mt-1">
+                    <Clock className="w-4 h-4" />
+                    {countdown}s remaining
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Timeframe Info */}
+          <div className="text-right hidden md:block">
+            <div className="text-sm text-slate-400 font-medium uppercase tracking-wider mb-1">Timeframe</div>
+            <div className="text-lg font-bold text-white bg-slate-700/50 px-4 py-2 rounded-lg border border-slate-600">
+              {timeframe}
+            </div>
           </div>
         </div>
+      </div>
+
+      {/* TradingView Widget */}
+      <div className="bg-slate-800 rounded-2xl shadow-xl border border-slate-700 overflow-hidden h-[500px]">
+        <div id="tradingview_widget" ref={container} className="w-full h-full" />
       </div>
     </div>
   );

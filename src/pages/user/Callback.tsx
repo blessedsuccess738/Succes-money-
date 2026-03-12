@@ -1,28 +1,41 @@
 import { useState, useEffect, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { CheckCircle2, AlertCircle } from 'lucide-react';
+import { auth, db, handleFirestoreError, OperationType } from '../../firebase';
+import { onAuthStateChanged } from 'firebase/auth';
+import { doc, getDoc, updateDoc } from 'firebase/firestore';
 
 export default function Callback() {
   const [pocketOptionId, setPocketOptionId] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
   const navigate = useNavigate();
 
   useEffect(() => {
-    fetch('/api/auth/me')
-      .then(res => res.json())
-      .then(data => {
-        if (!data.user) {
-          navigate('/login');
-        } else if (data.user.role === 'admin') {
-          navigate('/admin');
-        } else if (!data.user.hasAccessCode) {
-          navigate('/verify-code');
-        } else if (data.user.pocketOptionId) {
-          navigate('/dashboard');
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        try {
+          const userDoc = await getDoc(doc(db, 'users', user.uid));
+          const userData = userDoc.data();
+          
+          if (userData?.role === 'admin') {
+            navigate('/admin');
+          } else if (!userData?.hasAccessCode) {
+            navigate('/verify-code');
+          } else if (userData?.pocketOptionId) {
+            navigate('/dashboard');
+          } else {
+            setAuthLoading(false);
+          }
+        } catch (error) {
+          handleFirestoreError(error, OperationType.GET, 'users/' + user.uid);
         }
-      })
-      .catch(() => navigate('/login'));
+      } else {
+        navigate('/login');
+      }
+    });
+    return () => unsubscribe();
   }, [navigate]);
 
   const handleSubmit = async (e: FormEvent) => {
@@ -37,25 +50,32 @@ export default function Callback() {
     setLoading(true);
 
     try {
-      const res = await fetch('/api/auth/pocket-option', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pocketOptionId }),
-      });
+      const user = auth.currentUser;
+      if (!user) throw new Error('Not authenticated');
 
-      const data = await res.json();
-
-      if (res.ok) {
-        navigate('/dashboard');
-      } else {
-        setError(data.error || 'Failed to link account');
+      try {
+        await updateDoc(doc(db, 'users', user.uid), {
+          pocketOptionId: pocketOptionId.trim()
+        });
+      } catch (error) {
+        handleFirestoreError(error, OperationType.UPDATE, 'users/' + user.uid);
       }
+
+      navigate('/dashboard');
     } catch (err: any) {
-      setError(err.message || 'Network error occurred. Please try again.');
+      setError(err.message || 'Failed to link account. Please try again.');
     } finally {
       setLoading(false);
     }
   };
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-indigo-500"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">

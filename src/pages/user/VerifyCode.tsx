@@ -1,26 +1,46 @@
 import { useState, useEffect, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Key, AlertCircle } from 'lucide-react';
+import { auth, db, handleFirestoreError, OperationType } from '../../firebase';
+import { onAuthStateChanged } from 'firebase/auth';
+import { doc, getDoc, collection, query, where, getDocs, updateDoc, serverTimestamp } from 'firebase/firestore';
 
 export default function VerifyCode() {
   const [accessCode, setAccessCode] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [user, setUser] = useState<any>(null);
   const navigate = useNavigate();
 
   useEffect(() => {
-    fetch('/api/auth/me')
-      .then(res => res.json())
-      .then(data => {
-        if (!data.user) {
-          navigate('/login');
-        } else if (data.user.role === 'admin') {
-          navigate('/admin');
-        } else if (data.user.hasAccessCode) {
-          navigate('/dashboard');
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        try {
+          const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+          const userData = userDoc.data();
+          
+          if (userData) {
+            if (userData.role === 'admin') {
+              navigate('/admin');
+            } else {
+              // Check if user already has access
+              const q = query(collection(db, 'access_codes'), where('usedBy', '==', firebaseUser.uid));
+              const codeSnap = await getDocs(q);
+              if (!codeSnap.empty) {
+                navigate('/dashboard');
+              } else {
+                setUser({ ...userData, uid: firebaseUser.uid });
+              }
+            }
+          }
+        } catch (error) {
+          handleFirestoreError(error, OperationType.GET, 'users/' + firebaseUser.uid);
         }
-      })
-      .catch(() => navigate('/login'));
+      } else {
+        navigate('/login');
+      }
+    });
+    return () => unsubscribe();
   }, [navigate]);
 
   const handleSubmit = async (e: FormEvent) => {
@@ -29,26 +49,39 @@ export default function VerifyCode() {
     setLoading(true);
 
     try {
-      const res = await fetch('/api/auth/verify-code', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accessCode }),
-      });
+      if (!user) throw new Error('User not authenticated');
 
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text.includes('<!DOCTYPE') ? `Server returned HTML (404/500). Check if backend is running.` : text || `Error ${res.status}`);
+      // Find the access code
+      const q = query(collection(db, 'access_codes'), where('code', '==', accessCode.toUpperCase()), where('isUsed', '==', false));
+      let codeSnap;
+      try {
+        codeSnap = await getDocs(q);
+      } catch (error) {
+        handleFirestoreError(error, OperationType.LIST, 'access_codes');
+        return;
       }
 
-      const data = await res.json();
+      if (codeSnap.empty) {
+        throw new Error('Invalid or already used access code');
+      }
+
+      const codeDoc = codeSnap.docs[0];
       
-      if (data.success) {
-        navigate('/dashboard');
-      } else {
-        setError(data.error || 'Invalid access code');
+      // Update the code
+      try {
+        await updateDoc(doc(db, 'access_codes', codeDoc.id), {
+          isUsed: true,
+          usedBy: user.uid,
+          usedAt: serverTimestamp()
+        });
+      } catch (error) {
+        handleFirestoreError(error, OperationType.UPDATE, 'access_codes/' + codeDoc.id);
       }
+
+      navigate('/dashboard');
     } catch (err: any) {
-      setError(err.message || 'Network error. Please try again.');
+      console.error('Verify code error:', err);
+      setError(err.message || 'Failed to verify access code');
     } finally {
       setLoading(false);
     }

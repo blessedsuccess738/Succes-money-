@@ -1,41 +1,58 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Lock, User } from 'lucide-react';
+import { auth, db } from '../../firebase';
+import { signInWithEmailAndPassword } from 'firebase/auth';
+import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
 
 export default function UserLogin() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      });
+    setError('');
+    setLoading(true);
 
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text.includes('<!DOCTYPE') ? `Server returned HTML (404/500). Check if backend is running.` : text || `Error ${res.status}`);
+    try {
+      const email = username.includes('@') ? username : `${username}@signalbot.com`;
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
+
+      // Get user profile
+      const userDoc = await getDoc(doc(db, 'users', user.uid));
+      const userData = userDoc.data();
+
+      if (!userData) {
+        throw new Error('User profile not found');
       }
 
-      const data = await res.json();
-      if (data.success) {
-        if (data.role === 'admin') {
-          navigate('/admin');
-        } else if (!data.hasAccessCode) {
-          navigate('/verify-code');
-        } else {
-          navigate('/dashboard');
-        }
+      if (userData.role === 'admin') {
+        navigate('/admin');
       } else {
-        setError(data.error || 'Login failed');
+        // Check if user has used an access code
+        const q = query(collection(db, 'access_codes'), where('usedBy', '==', user.uid));
+        const codeSnap = await getDocs(q);
+        const hasAccessCode = !codeSnap.empty;
+
+        if (hasAccessCode) {
+          navigate('/dashboard');
+        } else {
+          navigate('/verify-code');
+        }
       }
     } catch (err: any) {
-      setError(err.message || 'Network error');
+      console.error('Login error:', err);
+      if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+        setError('Invalid username or password');
+      } else {
+        setError(err.message || 'Login failed');
+      }
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -73,9 +90,10 @@ export default function UserLogin() {
           </div>
           <button
             type="submit"
-            className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-medium py-2 rounded-lg transition-colors"
+            disabled={loading}
+            className="w-full bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-600 text-white font-medium py-2 rounded-lg transition-colors"
           >
-            Sign In
+            {loading ? 'Logging in...' : 'Sign In'}
           </button>
         </form>
         <p className="mt-6 text-center text-sm text-slate-400">

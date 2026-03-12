@@ -1,35 +1,39 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Shield } from 'lucide-react';
+import { auth, db } from '../../firebase';
+import { signInWithEmailAndPassword } from 'firebase/auth';
+import { doc, getDoc } from 'firebase/firestore';
 
 export default function AdminLogin() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    setLoading(true);
+    setError('');
+    
     try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      });
+      const email = username.includes('@') ? username : `${username}@signalbot.com`;
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
 
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text.includes('<!DOCTYPE') ? `Server returned HTML (404/500). Check if backend is running.` : text || `Error ${res.status}`);
-      }
+      const userDoc = await getDoc(doc(db, 'users', user.uid));
+      const userData = userDoc.data();
 
-      const data = await res.json();
-      if (data.success && data.role === 'admin') {
+      if (userData?.role === 'admin' || user.email === 'blessedsuccess738@gmail.com') {
         navigate('/admin');
       } else {
-        setError(data.error || 'Admin access denied');
+        setError('Admin access denied');
       }
     } catch (err: any) {
-      setError(err.message || 'Network error');
+      setError(err.message || 'Authentication failed');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -66,9 +70,10 @@ export default function AdminLogin() {
           </div>
           <button
             type="submit"
-            className="w-full bg-indigo-500 hover:bg-indigo-600 text-white font-medium py-2 rounded-lg transition-colors mt-4"
+            disabled={loading}
+            className="w-full bg-indigo-500 hover:bg-indigo-600 disabled:bg-slate-700 text-white font-medium py-2 rounded-lg transition-colors mt-4"
           >
-            Authenticate
+            {loading ? 'Authenticating...' : 'Authenticate'}
           </button>
         </form>
       </div>

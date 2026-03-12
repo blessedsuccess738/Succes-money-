@@ -1,5 +1,4 @@
 import express from 'express';
-import { createServer as createViteServer } from 'vite';
 import Database from 'better-sqlite3';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
@@ -24,79 +23,96 @@ app.use(express.json());
 app.use(cookieParser());
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', time: new Date().toISOString() });
+  res.json({ status: 'ok', time: new Date().toISOString(), env: process.env.NODE_ENV });
 });
 
 // Database Setup
-const db = new Database('database.db');
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT UNIQUE,
-    password TEXT,
-    role TEXT DEFAULT 'user',
-    ip_address TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS access_codes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    code TEXT UNIQUE,
-    is_used BOOLEAN DEFAULT 0,
-    used_by INTEGER,
-    FOREIGN KEY(used_by) REFERENCES users(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS signals (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    asset TEXT,
-    timeframe TEXT,
-    signal TEXT,
-    user_id INTEGER,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(user_id) REFERENCES users(id)
-  );
+let db: any;
+try {
+  const dbPath = process.env.NODE_ENV === 'production' && process.env.VERCEL ? '/tmp/database.db' : 'database.db';
+  console.log(`Initializing database at: ${dbPath}`);
+  db = new Database(dbPath);
   
-  CREATE TABLE IF NOT EXISTS settings (
-    key TEXT PRIMARY KEY,
-    value TEXT
-  );
-
-  CREATE TABLE IF NOT EXISTS notifications (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    title TEXT,
-    message TEXT,
-    type TEXT,
-    is_read BOOLEAN DEFAULT 0,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(user_id) REFERENCES users(id)
-  );
-`);
-
-try {
-  db.exec(`ALTER TABLE users ADD COLUMN pocket_option_id TEXT;`);
-} catch (e) {
-  // Column might already exist
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT UNIQUE,
+      password TEXT,
+      role TEXT DEFAULT 'user',
+      ip_address TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    -- ... rest of tables ...
+  `);
+} catch (err) {
+  console.error('Failed to initialize database:', err);
 }
 
-try {
-  db.exec(`ALTER TABLE users ADD COLUMN ip_address TEXT;`);
-} catch (e) {
-  // Column might already exist
-}
+if (db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT UNIQUE,
+      password TEXT,
+      role TEXT DEFAULT 'user',
+      ip_address TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
 
-// Seed Admin User and Settings
-const adminExists = db.prepare('SELECT * FROM users WHERE role = ?').get('admin');
-if (!adminExists) {
-  const hashedPassword = bcrypt.hashSync('admin123', 10);
-  db.prepare('INSERT INTO users (username, password, role) VALUES (?, ?, ?)').run('admin', hashedPassword, 'admin');
-}
+    CREATE TABLE IF NOT EXISTS access_codes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      code TEXT UNIQUE,
+      is_used BOOLEAN DEFAULT 0,
+      used_by INTEGER,
+      FOREIGN KEY(used_by) REFERENCES users(id)
+    );
 
-const linkExists = db.prepare('SELECT * FROM settings WHERE key = ?').get('public_link');
-if (!linkExists) {
-  db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('public_link', 'https://signal.com');
+    CREATE TABLE IF NOT EXISTS signals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      asset TEXT,
+      timeframe TEXT,
+      signal TEXT,
+      user_id INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    );
+    
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS notifications (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER,
+      title TEXT,
+      message TEXT,
+      type TEXT,
+      is_read BOOLEAN DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    );
+  `);
+
+  try {
+    db.exec(`ALTER TABLE users ADD COLUMN pocket_option_id TEXT;`);
+  } catch (e) {}
+
+  try {
+    db.exec(`ALTER TABLE users ADD COLUMN ip_address TEXT;`);
+  } catch (e) {}
+
+  // Seed Admin User and Settings
+  const adminExists = db.prepare('SELECT * FROM users WHERE role = ?').get('admin');
+  if (!adminExists) {
+    const hashedPassword = bcrypt.hashSync('admin123', 10);
+    db.prepare('INSERT INTO users (username, password, role) VALUES (?, ?, ?)').run('admin', hashedPassword, 'admin');
+  }
+
+  const linkExists = db.prepare('SELECT * FROM settings WHERE key = ?').get('public_link');
+  if (!linkExists) {
+    db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('public_link', 'https://signal.com');
+  }
 }
 
 // Middleware
@@ -372,6 +388,7 @@ export default app;
 
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',

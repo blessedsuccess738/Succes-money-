@@ -1,39 +1,57 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { Lock, User, Key } from 'lucide-react';
+import { Lock, User } from 'lucide-react';
+import { auth, db } from '../../firebase';
+import { createUserWithEmailAndPassword } from 'firebase/auth';
+import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 
 export default function UserSignup() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
-    try {
-      const res = await fetch('/api/auth/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      });
-      
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text.includes('<!DOCTYPE') ? `Server returned HTML (404/500). Check if backend is running.` : text || `Error ${res.status}`);
-      }
+    setError('');
+    setLoading(true);
 
-      const data = await res.json();
-      if (data.success) {
-        if (data.role === 'admin') {
-          navigate('/admin');
-        } else {
-          navigate('/verify-code');
-        }
+    try {
+      // Firebase Auth requires email format
+      const email = username.includes('@') ? username : `${username}@signalbot.com`;
+      
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
+
+      const role = email.toLowerCase() === 'blessedsuccess738@gmail.com' ? 'admin' : 'user';
+
+      // Create user profile in Firestore
+      await setDoc(doc(db, 'users', user.uid), {
+        username: username,
+        role: role,
+        createdAt: serverTimestamp(),
+        ipAddress: 'unknown' // IP tracking is harder on client-side without external API
+      });
+
+      if (role === 'admin') {
+        navigate('/admin');
       } else {
-        setError(data.error || 'Signup failed');
+        navigate('/verify-code');
       }
     } catch (err: any) {
-      setError(err.message || 'Network error');
+      console.error('Signup error:', err);
+      if (err.code === 'auth/email-already-in-use') {
+        setError('Username or email already exists');
+      } else if (err.code === 'auth/weak-password') {
+        setError('Password should be at least 6 characters');
+      } else if (err.code === 'auth/invalid-email') {
+        setError('Please enter a valid email address');
+      } else {
+        setError(err.message || 'Signup failed');
+      }
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -71,9 +89,10 @@ export default function UserSignup() {
           </div>
           <button
             type="submit"
-            className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-medium py-2 rounded-lg transition-colors"
+            disabled={loading}
+            className="w-full bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-600 text-white font-medium py-2 rounded-lg transition-colors"
           >
-            Sign Up
+            {loading ? 'Creating Account...' : 'Sign Up'}
           </button>
         </form>
         <p className="mt-6 text-center text-sm text-slate-400">

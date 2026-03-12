@@ -2,45 +2,73 @@ import { useState, useEffect, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Shield, Users, Activity, Key, Settings, LogOut, ExternalLink, MessageSquare } from 'lucide-react';
 import Notifications from '../../components/Notifications';
+import { auth, db, handleFirestoreError, OperationType } from '../../firebase';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { collection, query, getDocs, addDoc, orderBy, limit, getDoc, doc, serverTimestamp } from 'firebase/firestore';
 
 export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState('browser');
-  const [users, setUsers] = useState([]);
-  const [signals, setSignals] = useState([]);
-  const [codes, setCodes] = useState([]);
-  const [settings, setSettings] = useState([]);
+  const [users, setUsers] = useState<any[]>([]);
+  const [signals, setSignals] = useState<any[]>([]);
+  const [codes, setCodes] = useState<any[]>([]);
+  const [settings, setSettings] = useState<any[]>([]);
   const [newCode, setNewCode] = useState('');
   const [broadcastMessage, setBroadcastMessage] = useState('');
   const [sendingBroadcast, setSendingBroadcast] = useState(false);
+  const [currentUser, setCurrentUser] = useState<any>(null);
   const navigate = useNavigate();
 
   useEffect(() => {
-    fetch('/api/auth/me')
-      .then(res => res.json())
-      .then(data => {
-        if (!data.user || data.user.role !== 'admin') {
-          navigate('/meta');
-        } else {
-          fetchData();
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        try {
+          const userDoc = await getDoc(doc(db, 'users', user.uid));
+          const userData = userDoc.data();
+          if (userData?.role !== 'admin' && user.email !== 'blessedsuccess738@gmail.com') {
+            navigate('/meta');
+          } else {
+            setCurrentUser({ ...user, ...userData });
+            fetchData();
+          }
+        } catch (error) {
+          handleFirestoreError(error, OperationType.GET, 'users/' + user.uid);
         }
-      })
-      .catch(() => navigate('/meta'));
+      } else {
+        navigate('/meta');
+      }
+    });
+    return () => unsubscribe();
   }, [activeTab, navigate]);
 
   const fetchData = async () => {
     try {
       if (activeTab === 'users') {
-        const res = await fetch('/api/admin/users');
-        setUsers(await res.json());
+        const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
+        try {
+          const snapshot = await getDocs(q);
+          setUsers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+        } catch (error) {
+          handleFirestoreError(error, OperationType.LIST, 'users');
+        }
       } else if (activeTab === 'signals') {
-        const res = await fetch('/api/admin/signals');
-        setSignals(await res.json());
+        const q = query(collection(db, 'signals'), orderBy('createdAt', 'desc'), limit(100));
+        try {
+          const snapshot = await getDocs(q);
+          setSignals(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+        } catch (error) {
+          handleFirestoreError(error, OperationType.LIST, 'signals');
+        }
       } else if (activeTab === 'codes') {
-        const res = await fetch('/api/admin/codes');
-        setCodes(await res.json());
+        const q = query(collection(db, 'access_codes'), orderBy('createdAt', 'desc'));
+        try {
+          const snapshot = await getDocs(q);
+          setCodes(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+        } catch (error) {
+          handleFirestoreError(error, OperationType.LIST, 'access_codes');
+        }
       } else if (activeTab === 'settings') {
-        const res = await fetch('/api/admin/settings');
-        setSettings(await res.json());
+        // Mock settings for now or fetch from a 'settings' collection
+        setSettings([{ key: 'system_status', value: 'online' }, { key: 'maintenance_mode', value: 'off' }]);
       }
     } catch (err) {
       console.error(err);
@@ -48,16 +76,24 @@ export default function AdminDashboard() {
   };
 
   const generateCode = async () => {
-    const res = await fetch('/api/admin/codes/generate', { method: 'POST' });
-    const data = await res.json();
-    if (data.success) {
-      setNewCode(data.code);
+    const code = Math.random().toString(36).substring(2, 10).toUpperCase();
+    try {
+      await addDoc(collection(db, 'access_codes'), {
+        code,
+        isUsed: false,
+        usedBy: null,
+        usedByUsername: null,
+        createdAt: serverTimestamp()
+      });
+      setNewCode(code);
       fetchData();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'access_codes');
     }
   };
 
   const handleLogout = async () => {
-    await fetch('/api/auth/logout', { method: 'POST' });
+    await signOut(auth);
     navigate('/meta');
   };
 
@@ -67,15 +103,17 @@ export default function AdminDashboard() {
     
     setSendingBroadcast(true);
     try {
-      await fetch('/api/admin/broadcast', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: broadcastMessage })
+      await addDoc(collection(db, 'notifications'), {
+        title: 'Admin Broadcast',
+        message: broadcastMessage,
+        type: 'broadcast',
+        isRead: false,
+        createdAt: serverTimestamp()
       });
       setBroadcastMessage('');
       alert('Broadcast message sent successfully!');
-    } catch (err) {
-      alert('Failed to send broadcast');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'notifications');
     }
     setSendingBroadcast(false);
   };
@@ -156,9 +194,9 @@ export default function AdminDashboard() {
                           {u.role}
                         </span>
                       </td>
-                      <td className="p-4 font-mono text-emerald-400">{u.pocket_option_id || 'Not Linked'}</td>
-                      <td className="p-4 font-mono text-slate-400">{u.ip_address || 'N/A'}</td>
-                      <td className="p-4 text-slate-400">{new Date(u.created_at).toLocaleString()}</td>
+                      <td className="p-4 font-mono text-emerald-400">{u.pocketOptionId || 'Not Linked'}</td>
+                      <td className="p-4 font-mono text-slate-400">{u.ipAddress || 'N/A'}</td>
+                      <td className="p-4 text-slate-400">{u.createdAt?.toDate ? u.createdAt.toDate().toLocaleString() : 'N/A'}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -181,7 +219,7 @@ export default function AdminDashboard() {
                 <tbody className="divide-y divide-slate-800">
                   {signals.map((s: any) => (
                     <tr key={s.id} className="hover:bg-slate-800/50">
-                      <td className="p-4 text-slate-400">{new Date(s.created_at).toLocaleString()}</td>
+                      <td className="p-4 text-slate-400">{s.createdAt?.toDate ? s.createdAt.toDate().toLocaleString() : 'N/A'}</td>
                       <td className="p-4 font-medium text-white">{s.username}</td>
                       <td className="p-4">{s.asset}</td>
                       <td className="p-4">{s.timeframe}</td>
@@ -226,11 +264,11 @@ export default function AdminDashboard() {
                       <tr key={c.id} className="hover:bg-slate-800/50">
                         <td className="p-4 font-mono text-white tracking-wider">{c.code}</td>
                         <td className="p-4">
-                          <span className={`px-2 py-1 rounded text-xs ${c.is_used ? 'bg-slate-700 text-slate-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
-                            {c.is_used ? 'Used' : 'Available'}
+                          <span className={`px-2 py-1 rounded text-xs ${c.isUsed ? 'bg-slate-700 text-slate-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
+                            {c.isUsed ? 'Used' : 'Available'}
                           </span>
                         </td>
-                        <td className="p-4 text-slate-400">{c.used_by_username || '-'}</td>
+                        <td className="p-4 text-slate-400">{c.usedByUsername || '-'}</td>
                       </tr>
                     ))}
                   </tbody>

@@ -1,0 +1,162 @@
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: users
+// Document ID: {userId}
+// Fields:
+//   - username: string (required)
+//   - role: string (required, enum: ['user', 'admin'])
+//   - pocketOptionId: string (optional)
+//   - ipAddress: string (optional)
+//   - createdAt: timestamp (required)
+//
+// Collection: signals
+// Document ID: {signalId}
+// Fields:
+//   - asset: string (required)
+//   - timeframe: string (required)
+//   - signal: string (required, enum: ['Buy', 'Sell', 'Wait'])
+//   - rsi: number (optional)
+//   - macd: string (optional)
+//   - trend: string (optional)
+//   - userId: string (required)
+//   - username: string (required)
+//   - createdAt: timestamp (required)
+//
+// Collection: access_codes
+// Document ID: {codeId}
+// Fields:
+//   - code: string (required)
+//   - isUsed: bool (required)
+//   - usedBy: string (optional)
+//   - usedAt: timestamp (optional)
+//
+// Collection: settings
+// Document ID: {settingId}
+// Fields:
+//   - key: string (required)
+//   - value: string (required)
+//
+// Collection: notifications
+// Document ID: {notificationId}
+// Fields:
+//   - userId: string (optional)
+//   - title: string (required)
+//   - message: string (required)
+//   - type: string (required, enum: ['user', 'admin', 'broadcast'])
+//   - isRead: bool (required)
+//   - createdAt: timestamp (required)
+//
+// ===============================================================
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+         (request.auth.token.email == "blessedsuccess738@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return hasRequiredFields(['username', 'role', 'createdAt']) &&
+             data.username is string && data.username.size() > 0 && data.username.size() < 100 &&
+             data.role in ['user', 'admin'] &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidSignal(data) {
+      return hasRequiredFields(['asset', 'timeframe', 'signal', 'userId', 'username', 'createdAt']) &&
+             data.asset is string && data.asset.size() < 20 &&
+             data.timeframe is string && data.timeframe.size() < 10 &&
+             data.signal in ['Buy', 'Sell', 'Wait'] &&
+             data.userId is string &&
+             data.username is string &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidNotification(data) {
+      return hasRequiredFields(['title', 'message', 'type', 'isRead', 'createdAt']) &&
+             data.title is string && data.title.size() < 100 &&
+             data.message is string && data.message.size() < 1000 &&
+             data.type in ['user', 'admin', 'broadcast'] &&
+             data.isRead is bool &&
+             data.createdAt is timestamp;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isAuthenticated() && isValidUser(request.resource.data) && 
+                    (isOwner(userId) && request.resource.data.role == 'user' || isAdmin());
+      allow update: if isAuthenticated() && isValidUser(request.resource.data) && 
+                    ((isOwner(userId) && request.resource.data.role == resource.data.role) || isAdmin());
+    }
+
+    match /signals/{signalId} {
+      allow read: if isAuthenticated() && (request.auth.uid == resource.data.userId || isAdmin());
+      allow create: if isAuthenticated() && isValidSignal(request.resource.data) && 
+                    (request.auth.uid == request.resource.data.userId || isAdmin());
+      allow update, delete: if isAdmin();
+    }
+
+    match /access_codes/{codeId} {
+      allow read: if isAuthenticated();
+      allow create, delete: if isAdmin();
+      allow update: if isAuthenticated() && 
+                    (isAdmin() || 
+                     (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isUsed', 'usedBy', 'usedAt']) &&
+                      resource.data.isUsed == false &&
+                      request.resource.data.isUsed == true &&
+                      request.resource.data.usedBy == request.auth.uid));
+    }
+
+    match /settings/{settingId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if isAuthenticated() && 
+                   (resource.data.type == 'broadcast' || 
+                    (resource.data.type == 'user' && resource.data.userId == request.auth.uid) || 
+                    isAdmin());
+      allow create: if isAuthenticated() && isValidNotification(request.resource.data) &&
+                    (isAdmin() || (request.resource.data.type == 'admin' && request.resource.data.userId == null));
+      allow update: if isAuthenticated() && 
+                    (isAdmin() || 
+                     (request.auth.uid == resource.data.userId && 
+                      request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead'])));
+      allow delete: if isAdmin();
+    }
+  }
+}

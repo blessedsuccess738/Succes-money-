@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Bell, X } from 'lucide-react';
-import { io } from 'socket.io-client';
+import { db, handleFirestoreError, OperationType } from '../firebase';
+import { collection, query, where, onSnapshot, orderBy, limit, updateDoc, doc, writeBatch } from 'firebase/firestore';
 
 export default function Notifications({ user }: { user: any }) {
   const [notifications, setNotifications] = useState<any[]>([]);
@@ -8,43 +9,55 @@ export default function Notifications({ user }: { user: any }) {
   const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
-    fetch('/api/notifications')
-      .then(res => res.json())
-      .then(data => {
-        setNotifications(data);
-        setUnreadCount(data.filter((n: any) => !n.is_read).length);
-      });
+    if (!user) return;
 
-    const socket = io();
-    
+    let q;
     if (user.role === 'admin') {
-      socket.on('admin_notification', (notif) => {
-        setNotifications(prev => [notif, ...prev]);
-        setUnreadCount(prev => prev + 1);
-      });
+      q = query(
+        collection(db, 'notifications'),
+        where('type', 'in', ['admin', 'broadcast']),
+        orderBy('createdAt', 'desc'),
+        limit(50)
+      );
     } else {
-      socket.emit('join_user_room', user.id);
-      socket.on('user_notification', (notif) => {
-        setNotifications(prev => [notif, ...prev]);
-        setUnreadCount(prev => prev + 1);
-      });
+      q = query(
+        collection(db, 'notifications'),
+        where('type', 'in', ['user', 'broadcast']),
+        orderBy('createdAt', 'desc'),
+        limit(50)
+      );
     }
 
-    socket.on('broadcast_notification', (notif) => {
-      setNotifications(prev => [notif, ...prev]);
-      setUnreadCount(prev => prev + 1);
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const notifs = snapshot.docs
+        .map(doc => ({ id: doc.id, ...doc.data() }))
+        .filter((n: any) => n.type === 'broadcast' || n.userId === user.uid || user.role === 'admin');
+      
+      setNotifications(notifs);
+      setUnreadCount(notifs.filter((n: any) => !n.isRead).length);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'notifications');
     });
 
-    return () => {
-      socket.disconnect();
-    };
+    return () => unsubscribe();
   }, [user]);
 
-  const handleOpen = () => {
+  const handleOpen = async () => {
     setIsOpen(!isOpen);
     if (!isOpen && unreadCount > 0) {
-      fetch('/api/notifications/read', { method: 'POST' })
-        .then(() => setUnreadCount(0));
+      // Mark all as read
+      const batch = writeBatch(db);
+      notifications.forEach(notif => {
+        if (!notif.isRead) {
+          batch.update(doc(db, 'notifications', notif.id), { isRead: true });
+        }
+      });
+      try {
+        await batch.commit();
+        setUnreadCount(0);
+      } catch (error) {
+        handleFirestoreError(error, OperationType.WRITE, 'notifications');
+      }
     }
   };
 
@@ -80,11 +93,11 @@ export default function Notifications({ user }: { user: any }) {
               ) : (
                 <div className="divide-y divide-slate-700/50">
                   {notifications.map((notif, idx) => (
-                    <div key={idx} className={`p-4 ${!notif.is_read ? 'bg-slate-700/20' : ''} hover:bg-slate-700/40 transition-colors`}>
+                    <div key={idx} className={`p-4 ${!notif.isRead ? 'bg-slate-700/20' : ''} hover:bg-slate-700/40 transition-colors`}>
                       <div className="flex justify-between items-start mb-1">
                         <h4 className="font-medium text-sm text-white">{notif.title}</h4>
                         <span className="text-[10px] text-slate-500 whitespace-nowrap ml-2">
-                          {new Date(notif.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          {notif.createdAt?.toDate ? notif.createdAt.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Just now'}
                         </span>
                       </div>
                       <p className="text-xs text-slate-400 leading-relaxed">{notif.message}</p>

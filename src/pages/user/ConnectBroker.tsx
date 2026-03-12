@@ -1,25 +1,34 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ExternalLink, ShieldCheck } from 'lucide-react';
+import { auth, db } from '../../firebase';
+import { onAuthStateChanged } from 'firebase/auth';
+import { doc, getDoc } from 'firebase/firestore';
 
 export default function ConnectBroker() {
+  const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
   useEffect(() => {
-    fetch('/api/auth/me')
-      .then(res => res.json())
-      .then(data => {
-        if (!data.user) {
-          navigate('/login');
-        } else if (data.user.role === 'admin') {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        const userDoc = await getDoc(doc(db, 'users', user.uid));
+        const userData = userDoc.data();
+        
+        if (userData?.role === 'admin') {
           navigate('/admin');
-        } else if (!data.user.hasAccessCode) {
+        } else if (!userData?.hasAccessCode) {
           navigate('/verify-code');
-        } else if (data.user.pocketOptionId) {
+        } else if (userData?.pocketOptionId) {
           navigate('/dashboard');
+        } else {
+          setLoading(false);
         }
-      })
-      .catch(() => navigate('/login'));
+      } else {
+        navigate('/login');
+      }
+    });
+    return () => unsubscribe();
   }, [navigate]);
 
   const handleConnect = () => {
@@ -27,6 +36,14 @@ export default function ConnectBroker() {
     const callbackUrl = encodeURIComponent(`${window.location.origin}/callback`);
     window.location.href = `https://pocketoption.com/register?utm_source=signal_bot&redirect_url=${callbackUrl}`;
   };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-indigo-500"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">

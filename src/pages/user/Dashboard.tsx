@@ -1,7 +1,9 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Activity, Clock, LogOut, TrendingUp, ExternalLink, ChevronDown } from 'lucide-react';
-import { io } from 'socket.io-client';
+import { auth, db, handleFirestoreError, OperationType } from '../../firebase';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { doc, getDoc, collection, query, where, getDocs, addDoc, serverTimestamp, onSnapshot, orderBy, limit, getDocFromCache } from 'firebase/firestore';
 import TradeView from '../../components/TradeView';
 import Notifications from '../../components/Notifications';
 
@@ -35,54 +37,119 @@ export default function UserDashboard() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    fetch('/api/auth/me')
-      .then(res => res.json())
-      .then(data => {
-        if (data.user) {
-          if (data.user.role === 'admin') {
-            navigate('/admin');
-          } else if (!data.user.hasAccessCode) {
-            navigate('/verify-code');
-          } else if (!data.user.pocketOptionId) {
-            navigate('/connect-broker');
+    const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        try {
+          const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+          const userData = userDoc.data();
+          
+          if (userData) {
+            if (userData.role === 'admin') {
+              navigate('/admin');
+              return;
+            }
+
+            // Check access code
+            const qCode = query(collection(db, 'access_codes'), where('usedBy', '==', firebaseUser.uid));
+            const codeSnap = await getDocs(qCode);
+            if (codeSnap.empty) {
+              navigate('/verify-code');
+              return;
+            }
+
+            // Check pocket option id
+            if (!userData.pocketOptionId) {
+              navigate('/connect-broker');
+              return;
+            }
+
+            setUser({ ...userData, uid: firebaseUser.uid } as any);
           } else {
-            setUser(data.user);
+            navigate('/login');
           }
-        } else {
-          navigate('/login');
+        } catch (error) {
+          handleFirestoreError(error, OperationType.GET, 'users/' + firebaseUser.uid);
         }
-      })
-      .catch(() => navigate('/login'));
-      
-    const socket = io();
-    socket.on('new_signal', (newSignal) => {
-      setLiveSignals(prev => [newSignal, ...prev].slice(0, 10));
+      } else {
+        navigate('/login');
+      }
+    });
+
+    // Listen for live signals
+    const qSignals = query(collection(db, 'signals'), orderBy('createdAt', 'desc'), limit(10));
+    const unsubscribeSignals = onSnapshot(qSignals, (snapshot) => {
+      const signals = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setLiveSignals(signals);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'signals');
     });
 
     return () => {
-      socket.disconnect();
+      unsubscribeAuth();
+      unsubscribeSignals();
     };
   }, [navigate]);
 
   const handleLogout = async () => {
-    await fetch('/api/auth/logout', { method: 'POST' });
+    await signOut(auth);
     navigate('/login');
   };
 
   const getSignal = async () => {
+    if (!user) return;
     setLoading(true);
     try {
-      const res = await fetch('/api/signals/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ asset, timeframe }),
-      });
-      const data = await res.json();
-      if (data.signal) {
-        setSignal(data);
+      // Sophisticated mock logic for signal generation (moved from backend)
+      const rsi = Math.floor(Math.random() * 100);
+      const macd = (Math.random() * 2 - 1).toFixed(4);
+      const trend = Math.random() > 0.5 ? 'Bullish' : 'Bearish';
+      
+      let signalResult = 'Wait';
+      if (rsi > 70) signalResult = 'Sell';
+      else if (rsi < 30) signalResult = 'Buy';
+      else if (trend === 'Bullish' && rsi > 50) signalResult = 'Buy';
+      else if (trend === 'Bearish' && rsi < 50) signalResult = 'Sell';
+      else signalResult = Math.random() > 0.5 ? 'Buy' : 'Sell';
+
+      const signalData = {
+        asset,
+        timeframe,
+        signal: signalResult,
+        rsi,
+        macd,
+        trend,
+        userId: (user as any).uid,
+        username: user.username,
+        createdAt: serverTimestamp()
+      };
+
+      try {
+        const docRef = await addDoc(collection(db, 'signals'), signalData);
+        setSignal({ id: docRef.id, ...signalData, createdAt: new Date().toISOString() });
+
+        // Create notifications
+        await addDoc(collection(db, 'notifications'), {
+          userId: (user as any).uid,
+          title: 'New Signal',
+          message: `New signal generated for ${asset} (${timeframe}): ${signalResult}`,
+          type: 'user',
+          isRead: false,
+          createdAt: serverTimestamp()
+        });
+
+        await addDoc(collection(db, 'notifications'), {
+          title: 'Signal Request',
+          message: `User ${user.username} requested signal for ${asset}`,
+          type: 'admin',
+          isRead: false,
+          createdAt: serverTimestamp()
+        });
+      } catch (error) {
+        handleFirestoreError(error, OperationType.CREATE, 'signals');
       }
+
     } catch (err) {
-      console.error(err);
+      console.error('Signal generation error:', err);
     }
     setLoading(false);
   };

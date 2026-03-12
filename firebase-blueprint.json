@@ -1,0 +1,92 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile and settings",
+      "type": "object",
+      "properties": {
+        "username": { "type": "string", "description": "Username or email" },
+        "role": { "type": "string", "enum": ["user", "admin"], "description": "User role" },
+        "pocketOptionId": { "type": "string", "description": "Pocket Option ID" },
+        "ipAddress": { "type": "string", "description": "Last known IP address" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Account creation date" }
+      },
+      "required": ["username", "role", "createdAt"]
+    },
+    "Signal": {
+      "title": "Signal",
+      "description": "Trading signal generated for a user",
+      "type": "object",
+      "properties": {
+        "asset": { "type": "string", "description": "Trading asset (e.g., EUR/USD)" },
+        "timeframe": { "type": "string", "description": "Signal timeframe (e.g., 1m, 5m)" },
+        "signal": { "type": "string", "enum": ["Buy", "Sell", "Wait"], "description": "The signal direction" },
+        "rsi": { "type": "number", "description": "RSI value at time of signal" },
+        "macd": { "type": "string", "description": "MACD value at time of signal" },
+        "trend": { "type": "string", "description": "Trend direction" },
+        "userId": { "type": "string", "description": "ID of the user who requested the signal" },
+        "username": { "type": "string", "description": "Username of the user" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Signal generation date" }
+      },
+      "required": ["asset", "timeframe", "signal", "userId", "createdAt"]
+    },
+    "AccessCode": {
+      "title": "Access Code",
+      "description": "Code used to grant dashboard access",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "description": "The access code string" },
+        "isUsed": { "type": "boolean", "description": "Whether the code has been used" },
+        "usedBy": { "type": "string", "description": "UID of the user who used the code" },
+        "usedAt": { "type": "string", "format": "date-time", "description": "When the code was used" }
+      },
+      "required": ["code", "isUsed"]
+    },
+    "Setting": {
+      "title": "Setting",
+      "description": "Global application settings",
+      "type": "object",
+      "properties": {
+        "key": { "type": "string", "description": "Setting key" },
+        "value": { "type": "string", "description": "Setting value" }
+      },
+      "required": ["key", "value"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "User or admin notification",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Target user UID (null for broadcast/admin)" },
+        "title": { "type": "string", "description": "Notification title" },
+        "message": { "type": "string", "description": "Notification message" },
+        "type": { "type": "string", "enum": ["user", "admin", "broadcast"], "description": "Notification type" },
+        "isRead": { "type": "boolean", "description": "Read status" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Notification date" }
+      },
+      "required": ["title", "message", "type", "isRead", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/signals/{signalId}": {
+      "schema": "Signal",
+      "description": "Trading signals"
+    },
+    "/access_codes/{codeId}": {
+      "schema": "AccessCode",
+      "description": "Access codes for dashboard entry"
+    },
+    "/settings/{settingId}": {
+      "schema": "Setting",
+      "description": "Global app settings"
+    },
+    "/notifications/{notificationId}": {
+      "schema": "Notification",
+      "description": "In-app notifications"
+    }
+  }
+}
