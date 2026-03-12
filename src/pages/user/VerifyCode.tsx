@@ -72,10 +72,20 @@ export default function VerifyCode() {
         await updateDoc(doc(db, 'access_codes', codeDoc.id), {
           isUsed: true,
           usedBy: user.uid,
+          usedByUsername: user.displayName || user.email || 'Unknown',
           usedAt: serverTimestamp()
         });
       } catch (error) {
         handleFirestoreError(error, OperationType.UPDATE, 'access_codes/' + codeDoc.id);
+      }
+
+      // Update user profile
+      try {
+        await updateDoc(doc(db, 'users', user.uid), {
+          hasAccessCode: true
+        });
+      } catch (error) {
+        handleFirestoreError(error, OperationType.UPDATE, 'users/' + user.uid);
       }
 
       navigate('/dashboard');

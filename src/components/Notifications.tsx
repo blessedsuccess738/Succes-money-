@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
 import { Bell, X } from 'lucide-react';
-import { db, handleFirestoreError, OperationType } from '../firebase';
-import { collection, query, where, onSnapshot, orderBy, limit, updateDoc, doc, writeBatch } from 'firebase/firestore';
+import { auth } from '../firebase';
+import { io } from 'socket.io-client';
+
+const socket = io();
 
 export default function Notifications({ user }: { user: any }) {
   const [notifications, setNotifications] = useState<any[]>([]);
@@ -11,52 +13,62 @@ export default function Notifications({ user }: { user: any }) {
   useEffect(() => {
     if (!user) return;
 
-    let q;
+    const fetchNotifications = async () => {
+      try {
+        const token = await auth.currentUser?.getIdToken();
+        const response = await fetch('/api/notifications', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (response.ok) {
+          const data = await response.json();
+          setNotifications(data);
+          setUnreadCount(data.filter((n: any) => !n.is_read).length);
+        }
+      } catch (error) {
+        console.error('Failed to fetch notifications:', error);
+      }
+    };
+
+    fetchNotifications();
+
     if (user.role === 'admin') {
-      q = query(
-        collection(db, 'notifications'),
-        where('type', 'in', ['admin', 'broadcast']),
-        orderBy('createdAt', 'desc'),
-        limit(50)
-      );
+      socket.on('admin_notification', (notif: any) => {
+        setNotifications(prev => [notif, ...prev]);
+        setUnreadCount(prev => prev + 1);
+      });
     } else {
-      q = query(
-        collection(db, 'notifications'),
-        where('type', 'in', ['user', 'broadcast']),
-        orderBy('createdAt', 'desc'),
-        limit(50)
-      );
+      socket.on('user_notification', (notif: any) => {
+        setNotifications(prev => [notif, ...prev]);
+        setUnreadCount(prev => prev + 1);
+      });
     }
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const notifs = snapshot.docs
-        .map(doc => ({ id: doc.id, ...doc.data() }))
-        .filter((n: any) => n.type === 'broadcast' || n.userId === user.uid || user.role === 'admin');
-      
-      setNotifications(notifs);
-      setUnreadCount(notifs.filter((n: any) => !n.isRead).length);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, 'notifications');
+    socket.on('broadcast_notification', (notif: any) => {
+      setNotifications(prev => [notif, ...prev]);
+      setUnreadCount(prev => prev + 1);
     });
 
-    return () => unsubscribe();
+    return () => {
+      socket.off('admin_notification');
+      socket.off('user_notification');
+      socket.off('broadcast_notification');
+    };
   }, [user]);
 
   const handleOpen = async () => {
     setIsOpen(!isOpen);
     if (!isOpen && unreadCount > 0) {
-      // Mark all as read
-      const batch = writeBatch(db);
-      notifications.forEach(notif => {
-        if (!notif.isRead) {
-          batch.update(doc(db, 'notifications', notif.id), { isRead: true });
-        }
-      });
       try {
-        await batch.commit();
+        const token = await auth.currentUser?.getIdToken();
+        await fetch('/api/notifications/read', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        
+        setNotifications(prev => prev.map(n => ({ ...n, is_read: 1 })));
         setUnreadCount(0);
       } catch (error) {
-        handleFirestoreError(error, OperationType.WRITE, 'notifications');
+        console.error('Failed to mark notifications as read:', error);
       }
     }
   };
@@ -93,11 +105,11 @@ export default function Notifications({ user }: { user: any }) {
               ) : (
                 <div className="divide-y divide-slate-700/50">
                   {notifications.map((notif, idx) => (
-                    <div key={idx} className={`p-4 ${!notif.isRead ? 'bg-slate-700/20' : ''} hover:bg-slate-700/40 transition-colors`}>
+                    <div key={idx} className={`p-4 ${!notif.is_read ? 'bg-slate-700/20' : ''} hover:bg-slate-700/40 transition-colors`}>
                       <div className="flex justify-between items-start mb-1">
                         <h4 className="font-medium text-sm text-white">{notif.title}</h4>
                         <span className="text-[10px] text-slate-500 whitespace-nowrap ml-2">
-                          {notif.createdAt?.toDate ? notif.createdAt.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Just now'}
+                          {new Date(notif.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </span>
                       </div>
                       <p className="text-xs text-slate-400 leading-relaxed">{notif.message}</p>

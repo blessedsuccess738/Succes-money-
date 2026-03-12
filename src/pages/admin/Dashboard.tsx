@@ -42,6 +42,9 @@ export default function AdminDashboard() {
 
   const fetchData = async () => {
     try {
+      const token = await auth.currentUser?.getIdToken();
+      const headers = { 'Authorization': `Bearer ${token}` };
+
       if (activeTab === 'users') {
         const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
         try {
@@ -51,12 +54,9 @@ export default function AdminDashboard() {
           handleFirestoreError(error, OperationType.LIST, 'users');
         }
       } else if (activeTab === 'signals') {
-        const q = query(collection(db, 'signals'), orderBy('createdAt', 'desc'), limit(100));
-        try {
-          const snapshot = await getDocs(q);
-          setSignals(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-        } catch (error) {
-          handleFirestoreError(error, OperationType.LIST, 'signals');
+        const response = await fetch('/api/admin/signals', { headers });
+        if (response.ok) {
+          setSignals(await response.json());
         }
       } else if (activeTab === 'codes') {
         const q = query(collection(db, 'access_codes'), orderBy('createdAt', 'desc'));
@@ -67,13 +67,9 @@ export default function AdminDashboard() {
           handleFirestoreError(error, OperationType.LIST, 'access_codes');
         }
       } else if (activeTab === 'settings') {
-        const token = await auth.currentUser?.getIdToken();
-        const response = await fetch('/api/admin/settings', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
+        const response = await fetch('/api/admin/settings', { headers });
         if (response.ok) {
           const data = await response.json();
-          // Ensure pocket_option_api_key exists in the list for the UI
           if (!data.find((s: any) => s.key === 'pocket_option_api_key')) {
             data.push({ key: 'pocket_option_api_key', value: '' });
           }
@@ -113,17 +109,25 @@ export default function AdminDashboard() {
     
     setSendingBroadcast(true);
     try {
-      await addDoc(collection(db, 'notifications'), {
-        title: 'Admin Broadcast',
-        message: broadcastMessage,
-        type: 'broadcast',
-        isRead: false,
-        createdAt: serverTimestamp()
+      const token = await auth.currentUser?.getIdToken();
+      const response = await fetch('/api/admin/broadcast', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ message: broadcastMessage })
       });
-      setBroadcastMessage('');
-      alert('Broadcast message sent successfully!');
+      
+      if (response.ok) {
+        setBroadcastMessage('');
+        alert('Broadcast message sent successfully!');
+      } else {
+        alert('Failed to send broadcast');
+      }
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'notifications');
+      console.error('Broadcast error:', error);
+      alert('Error sending broadcast');
     }
     setSendingBroadcast(false);
   };
@@ -252,7 +256,7 @@ export default function AdminDashboard() {
                 <tbody className="divide-y divide-slate-800">
                   {signals.map((s: any) => (
                     <tr key={s.id} className="hover:bg-slate-800/50">
-                      <td className="p-4 text-slate-400">{s.createdAt?.toDate ? s.createdAt.toDate().toLocaleString() : 'N/A'}</td>
+                      <td className="p-4 text-slate-400">{new Date(s.created_at).toLocaleString()}</td>
                       <td className="p-4 font-medium text-white">{s.username}</td>
                       <td className="p-4">{s.asset}</td>
                       <td className="p-4">{s.timeframe}</td>

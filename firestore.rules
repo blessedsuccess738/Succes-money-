@@ -30,6 +30,7 @@
 //   - code: string (required)
 //   - isUsed: bool (required)
 //   - usedBy: string (optional)
+//   - usedByUsername: string (optional)
 //   - usedAt: timestamp (optional)
 //
 // Collection: settings
@@ -68,8 +69,9 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() &&
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
-         (request.auth.token.email == "blessedsuccess738@gmail.com" && request.auth.token.email_verified == true));
+        (request.auth.token.email == "blessedsuccess738@gmail.com" ||
+         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'));
     }
 
     function hasRequiredFields(fields) {
@@ -134,7 +136,7 @@ service cloud.firestore {
       allow create, delete: if isAdmin();
       allow update: if isAuthenticated() && 
                     (isAdmin() || 
-                     (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isUsed', 'usedBy', 'usedAt']) &&
+                     (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isUsed', 'usedBy', 'usedAt', 'usedByUsername']) &&
                       resource.data.isUsed == false &&
                       request.resource.data.isUsed == true &&
                       request.resource.data.usedBy == request.auth.uid));

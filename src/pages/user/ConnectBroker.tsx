@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { ExternalLink, ShieldCheck } from 'lucide-react';
 import { auth, db } from '../../firebase';
 import { onAuthStateChanged } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
 
 export default function ConnectBroker() {
   const [loading, setLoading] = useState(true);
@@ -17,7 +17,15 @@ export default function ConnectBroker() {
         
         if (userData?.role === 'admin') {
           navigate('/admin');
-        } else if (!userData?.hasAccessCode) {
+          return;
+        }
+        
+        // Check if user has an access code
+        const qCode = query(collection(db, 'access_codes'), where('usedBy', '==', user.uid));
+        const codeSnap = await getDocs(qCode);
+        const hasAccessCode = !codeSnap.empty;
+
+        if (!hasAccessCode) {
           navigate('/verify-code');
         } else if (userData?.pocketOptionId) {
           navigate('/dashboard');

@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { CheckCircle2, AlertCircle } from 'lucide-react';
 import { auth, db, handleFirestoreError, OperationType } from '../../firebase';
 import { onAuthStateChanged } from 'firebase/auth';
-import { doc, getDoc, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, collection, query, where, getDocs } from 'firebase/firestore';
 
 export default function Callback() {
   const [pocketOptionId, setPocketOptionId] = useState('');
@@ -21,7 +21,15 @@ export default function Callback() {
           
           if (userData?.role === 'admin') {
             navigate('/admin');
-          } else if (!userData?.hasAccessCode) {
+            return;
+          }
+          
+          // Check if user has an access code
+          const qCode = query(collection(db, 'access_codes'), where('usedBy', '==', user.uid));
+          const codeSnap = await getDocs(qCode);
+          const hasAccessCode = !codeSnap.empty;
+
+          if (!hasAccessCode) {
             navigate('/verify-code');
           } else if (userData?.pocketOptionId) {
             navigate('/dashboard');

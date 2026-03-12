@@ -83,6 +83,7 @@ if (db) {
       timeframe TEXT,
       signal TEXT,
       user_id TEXT,
+      username TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
     
@@ -109,6 +110,10 @@ if (db) {
 
   try {
     db.exec(`ALTER TABLE users ADD COLUMN ip_address TEXT;`);
+  } catch (e) {}
+
+  try {
+    db.exec(`ALTER TABLE signals ADD COLUMN username TEXT;`);
   } catch (e) {}
 
   // Seed Admin User and Settings
@@ -308,7 +313,7 @@ app.post('/api/signals/generate', authenticateToken, (req: any, res) => {
   else if (trend === 'Bearish' && rsi < 50) signal = 'Sell';
   else signal = Math.random() > 0.5 ? 'Buy' : 'Sell';
   
-  const result = db.prepare('INSERT INTO signals (asset, timeframe, signal, user_id) VALUES (?, ?, ?, ?)').run(asset, timeframe, signal, req.user.id);
+  const result = db.prepare('INSERT INTO signals (asset, timeframe, signal, user_id, username) VALUES (?, ?, ?, ?, ?)').run(asset, timeframe, signal, req.user.id, req.user.username);
   
   const newSignal = {
     id: result.lastInsertRowid,
@@ -366,10 +371,9 @@ app.get('/api/admin/users', authenticateToken, requireAdmin, (req, res) => {
 
 app.get('/api/admin/signals', authenticateToken, requireAdmin, (req, res) => {
   const signals = db.prepare(`
-    SELECT s.id, s.asset, s.timeframe, s.signal, s.created_at, u.username 
-    FROM signals s 
-    JOIN users u ON s.user_id = u.id
-    ORDER BY s.created_at DESC
+    SELECT id, asset, timeframe, signal, created_at, user_id, username
+    FROM signals
+    ORDER BY created_at DESC
   `).all();
   res.json(signals);
 });
