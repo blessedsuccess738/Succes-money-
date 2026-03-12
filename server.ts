@@ -7,6 +7,16 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import http from 'http';
 import { Server } from 'socket.io';
+import admin from 'firebase-admin';
+
+// Initialize Firebase Admin
+try {
+  admin.initializeApp({
+    projectId: 'studio-4616504978-c087a'
+  });
+} catch (e) {
+  console.error('Firebase Admin initialization error:', e);
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -72,9 +82,8 @@ if (db) {
       asset TEXT,
       timeframe TEXT,
       signal TEXT,
-      user_id INTEGER,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY(user_id) REFERENCES users(id)
+      user_id TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
     
     CREATE TABLE IF NOT EXISTS settings (
@@ -113,18 +122,43 @@ if (db) {
   if (!linkExists) {
     db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('public_link', 'https://signal.com');
   }
+
+  const apiKeyExists = db.prepare('SELECT * FROM settings WHERE key = ?').get('pocket_option_api_key');
+  if (!apiKeyExists) {
+    db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('pocket_option_api_key', '');
+  }
 }
 
 // Middleware
-const authenticateToken = (req: any, res: any, next: any) => {
-  const token = req.cookies.token;
-  if (!token) return res.status(401).json({ error: 'Unauthorized' });
+const authenticateToken = async (req: any, res: any, next: any) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  
+  if (!token) {
+    // Fallback to cookie for legacy support
+    const cookieToken = req.cookies.token;
+    if (!cookieToken) return res.status(401).json({ error: 'Unauthorized' });
+    
+    jwt.verify(cookieToken, JWT_SECRET, (err: any, user: any) => {
+      if (err) return res.status(403).json({ error: 'Forbidden' });
+      req.user = user;
+      next();
+    });
+    return;
+  }
 
-  jwt.verify(token, JWT_SECRET, (err: any, user: any) => {
-    if (err) return res.status(403).json({ error: 'Forbidden' });
-    req.user = user;
+  try {
+    const decodedToken = await admin.auth().verifyIdToken(token);
+    req.user = {
+      id: decodedToken.uid,
+      username: decodedToken.email || decodedToken.uid,
+      role: decodedToken.role || 'user' // You might want to fetch role from Firestore if needed
+    };
     next();
-  });
+  } catch (error) {
+    console.error('Firebase token verification failed:', error);
+    return res.status(403).json({ error: 'Invalid token' });
+  }
 };
 
 const requireAdmin = (req: any, res: any, next: any) => {
@@ -285,6 +319,7 @@ app.post('/api/signals/generate', authenticateToken, (req: any, res) => {
     macd,
     trend,
     username: req.user.username,
+    userId: req.user.id,
     created_at: new Date().toISOString()
   };
 
@@ -368,11 +403,20 @@ app.post('/api/admin/codes/generate', authenticateToken, requireAdmin, (req, res
 
 app.get('/api/admin/settings', authenticateToken, requireAdmin, (req, res) => {
   const settings = db.prepare('SELECT * FROM settings').all();
-  res.json(settings);
+  const maskedSettings = settings.map((s: any) => {
+    if (s.key === 'pocket_option_api_key' && s.value) {
+      return { ...s, value: '********' };
+    }
+    return s;
+  });
+  res.json(maskedSettings);
 });
 
 app.post('/api/admin/settings', authenticateToken, requireAdmin, (req, res) => {
   const { key, value } = req.body;
+  if (key === 'pocket_option_api_key' && value === '********') {
+    return res.json({ success: true, message: 'Value unchanged' });
+  }
   db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, value);
   res.json({ success: true });
 });

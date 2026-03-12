@@ -67,8 +67,18 @@ export default function AdminDashboard() {
           handleFirestoreError(error, OperationType.LIST, 'access_codes');
         }
       } else if (activeTab === 'settings') {
-        // Mock settings for now or fetch from a 'settings' collection
-        setSettings([{ key: 'system_status', value: 'online' }, { key: 'maintenance_mode', value: 'off' }]);
+        const token = await auth.currentUser?.getIdToken();
+        const response = await fetch('/api/admin/settings', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (response.ok) {
+          const data = await response.json();
+          // Ensure pocket_option_api_key exists in the list for the UI
+          if (!data.find((s: any) => s.key === 'pocket_option_api_key')) {
+            data.push({ key: 'pocket_option_api_key', value: '' });
+          }
+          setSettings(data);
+        }
       }
     } catch (err) {
       console.error(err);
@@ -116,6 +126,29 @@ export default function AdminDashboard() {
       handleFirestoreError(error, OperationType.CREATE, 'notifications');
     }
     setSendingBroadcast(false);
+  };
+
+  const updateSetting = async (key: string, value: string) => {
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const response = await fetch('/api/admin/settings', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ key, value })
+      });
+      if (response.ok) {
+        alert('Setting updated successfully');
+        fetchData();
+      } else {
+        alert('Failed to update setting');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Error updating setting');
+    }
   };
 
   return (
@@ -309,19 +342,32 @@ export default function AdminDashboard() {
           {activeTab === 'settings' && (
             <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 max-w-2xl">
               <h3 className="text-lg font-medium text-white mb-6">System Settings</h3>
-              <div className="space-y-4">
+              <div className="space-y-6">
                 {settings.map((s: any) => (
-                  <div key={s.key}>
-                    <label className="block text-sm font-medium text-slate-400 mb-1 capitalize">{s.key.replace('_', ' ')}</label>
-                    <input
-                      type="text"
-                      defaultValue={s.value}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-lg py-2 px-4 focus:outline-none focus:border-indigo-500 transition-colors text-white"
-                      readOnly
-                    />
+                  <div key={s.key} className="space-y-2">
+                    <label className="block text-sm font-medium text-slate-400 capitalize">
+                      {s.key.replace(/_/g, ' ')}
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type={s.key.includes('key') ? 'password' : 'text'}
+                        defaultValue={s.value}
+                        id={`setting-${s.key}`}
+                        className="flex-1 bg-slate-800 border border-slate-700 rounded-lg py-2 px-4 focus:outline-none focus:border-indigo-500 transition-colors text-white"
+                        placeholder={s.key.includes('key') ? 'Enter API Key' : ''}
+                      />
+                      <button
+                        onClick={() => {
+                          const input = document.getElementById(`setting-${s.key}`) as HTMLInputElement;
+                          updateSetting(s.key, input.value);
+                        }}
+                        className="bg-indigo-500 hover:bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                      >
+                        Save
+                      </button>
+                    </div>
                   </div>
                 ))}
-                <p className="text-sm text-slate-500 mt-4">Settings are currently read-only in this demo.</p>
               </div>
             </div>
           )}

@@ -3,9 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import { Activity, Clock, LogOut, TrendingUp, ExternalLink, ChevronDown } from 'lucide-react';
 import { auth, db, handleFirestoreError, OperationType } from '../../firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { doc, getDoc, collection, query, where, getDocs, addDoc, serverTimestamp, onSnapshot, orderBy, limit, getDocFromCache } from 'firebase/firestore';
+import { doc, getDoc, collection, query, where, getDocs, addDoc, serverTimestamp, onSnapshot, orderBy, limit } from 'firebase/firestore';
 import TradeView from '../../components/TradeView';
 import Notifications from '../../components/Notifications';
+import { io } from 'socket.io-client';
+
+const socket = io();
 
 const ASSETS = [
   { name: 'EUR/USD', flags: '🇪🇺 🇺🇸' },
@@ -75,18 +78,14 @@ export default function UserDashboard() {
       }
     });
 
-    // Listen for live signals
-    const qSignals = query(collection(db, 'signals'), orderBy('createdAt', 'desc'), limit(10));
-    const unsubscribeSignals = onSnapshot(qSignals, (snapshot) => {
-      const signals = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setLiveSignals(signals);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, 'signals');
+    // Listen for live signals via Socket.io
+    socket.on('new_signal', (newSignal: any) => {
+      setLiveSignals(prev => [newSignal, ...prev].slice(0, 10));
     });
 
     return () => {
       unsubscribeAuth();
-      unsubscribeSignals();
+      socket.off('new_signal');
     };
   }, [navigate]);
 
@@ -99,55 +98,27 @@ export default function UserDashboard() {
     if (!user) return;
     setLoading(true);
     try {
-      // Sophisticated mock logic for signal generation (moved from backend)
-      const rsi = Math.floor(Math.random() * 100);
-      const macd = (Math.random() * 2 - 1).toFixed(4);
-      const trend = Math.random() > 0.5 ? 'Bullish' : 'Bearish';
-      
-      let signalResult = 'Wait';
-      if (rsi > 70) signalResult = 'Sell';
-      else if (rsi < 30) signalResult = 'Buy';
-      else if (trend === 'Bullish' && rsi > 50) signalResult = 'Buy';
-      else if (trend === 'Bearish' && rsi < 50) signalResult = 'Sell';
-      else signalResult = Math.random() > 0.5 ? 'Buy' : 'Sell';
+      const token = await auth.currentUser?.getIdToken();
+      const response = await fetch('/api/signals/generate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ asset, timeframe })
+      });
 
-      const signalData = {
-        asset,
-        timeframe,
-        signal: signalResult,
-        rsi,
-        macd,
-        trend,
-        userId: (user as any).uid,
-        username: user.username,
-        createdAt: serverTimestamp()
-      };
-
-      try {
-        const docRef = await addDoc(collection(db, 'signals'), signalData);
-        setSignal({ id: docRef.id, ...signalData, createdAt: new Date().toISOString() });
-
-        // Create notifications
-        await addDoc(collection(db, 'notifications'), {
-          userId: (user as any).uid,
-          title: 'New Signal',
-          message: `New signal generated for ${asset} (${timeframe}): ${signalResult}`,
-          type: 'user',
-          isRead: false,
-          createdAt: serverTimestamp()
-        });
-
-        await addDoc(collection(db, 'notifications'), {
-          title: 'Signal Request',
-          message: `User ${user.username} requested signal for ${asset}`,
-          type: 'admin',
-          isRead: false,
-          createdAt: serverTimestamp()
-        });
-      } catch (error) {
-        handleFirestoreError(error, OperationType.CREATE, 'signals');
+      if (!response.ok) {
+        throw new Error('Failed to generate signal');
       }
 
+      const newSignal = await response.json();
+      setSignal(newSignal);
+      
+      // Also save to Firestore for history if needed, or just rely on the backend
+      // The user asked for it to be saved to the "signals table" (SQLite)
+      // and broadcasted via Socket.io, which we handled.
+      
     } catch (err) {
       console.error('Signal generation error:', err);
     }
@@ -342,7 +313,10 @@ export default function UserDashboard() {
                 liveSignals.map((s, i) => (
                   <div key={i} className="bg-slate-700/50 p-3 rounded-lg border border-slate-600/50">
                     <div className="flex justify-between items-start mb-2">
-                      <span className="font-medium text-white">{s.asset}</span>
+                      <div className="flex flex-col">
+                        <span className="font-medium text-white">{s.asset}</span>
+                        <span className="text-[10px] text-slate-500">User: {s.username}</span>
+                      </div>
                       <span className="text-xs text-slate-400">{new Date(s.created_at).toLocaleTimeString()}</span>
                     </div>
                     <div className="flex justify-between items-end">
