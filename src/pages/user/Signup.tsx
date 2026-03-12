@@ -24,37 +24,63 @@ export default function UserSignup() {
         email = 'blessedsuccess738@gmail.com';
       }
       
-      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      let userCredential;
+      try {
+        userCredential = await createUserWithEmailAndPassword(auth, email, password);
+        const user = userCredential.user;
+
+        const role = email.toLowerCase() === 'blessedsuccess738@gmail.com' ? 'admin' : 'user';
+        const shortId = Math.floor(100000 + Math.random() * 900000).toString();
+
+        // Create user profile in Firestore
+        await setDoc(doc(db, 'users', user.uid), {
+          username: username,
+          email: email,
+          shortId: shortId,
+          role: role,
+          createdAt: serverTimestamp(),
+          ipAddress: 'unknown'
+        });
+      } catch (signupErr: any) {
+        if (signupErr.code === 'auth/email-already-in-use') {
+          // If email exists, try to sign in instead
+          const { signInWithEmailAndPassword } = await import('firebase/auth');
+          userCredential = await signInWithEmailAndPassword(auth, email, password);
+        } else {
+          throw signupErr;
+        }
+      }
+
       const user = userCredential.user;
+      const userDoc = await getDoc(doc(db, 'users', user.uid));
+      const userData = userDoc.data();
 
-      const role = email.toLowerCase() === 'blessedsuccess738@gmail.com' ? 'admin' : 'user';
-      const shortId = Math.floor(100000 + Math.random() * 900000).toString();
-
-      // Create user profile in Firestore
-      await setDoc(doc(db, 'users', user.uid), {
-        username: username,
-        email: email,
-        shortId: shortId,
-        role: role,
-        createdAt: serverTimestamp(),
-        ipAddress: 'unknown' // IP tracking is harder on client-side without external API
-      });
-
-      if (role === 'admin') {
+      if (userData?.role === 'admin') {
         navigate('/admin');
       } else {
-        navigate('/verify-code');
+        // Check access code
+        const q = query(collection(db, 'access_codes'), where('usedBy', '==', user.uid));
+        const codeSnap = await getDocs(q);
+        const hasAccessCode = !codeSnap.empty;
+
+        if (userData?.pocketOptionId && hasAccessCode) {
+          navigate('/dashboard');
+        } else {
+          navigate('/verify-code');
+        }
       }
     } catch (err: any) {
-      console.error('Signup error:', err);
+      console.error('Auth error:', err);
       if (err.code === 'auth/email-already-in-use') {
         setError('Username or email already exists');
+      } else if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+        setError('This account already exists. Please enter the correct password.');
       } else if (err.code === 'auth/weak-password') {
         setError('Password should be at least 6 characters');
       } else if (err.code === 'auth/invalid-email') {
         setError('Please enter a valid email address');
       } else {
-        setError(err.message || 'Signup failed');
+        setError(err.message || 'Authentication failed');
       }
     } finally {
       setLoading(false);

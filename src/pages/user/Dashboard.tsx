@@ -314,7 +314,14 @@ export default function UserDashboard() {
                   <div key={i} className="bg-slate-700/50 p-3 rounded-lg border border-slate-600/50">
                     <div className="flex justify-between items-start mb-2">
                       <div className="flex flex-col">
-                        <span className="font-medium text-white">{s.asset}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-white">{s.asset}</span>
+                          {s.source && s.source !== 'Manual' && (
+                            <span className="text-[8px] bg-indigo-500/20 text-indigo-400 px-1.5 py-0.5 rounded border border-indigo-500/30 uppercase font-bold">
+                              {s.source}
+                            </span>
+                          )}
+                        </div>
                         <span className="text-[10px] text-slate-500">User: {s.username}</span>
                       </div>
                       <span className="text-xs text-slate-400">{new Date(s.created_at).toLocaleTimeString()}</span>

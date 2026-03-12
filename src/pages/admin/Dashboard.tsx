@@ -1,10 +1,10 @@
 import { useState, useEffect, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Shield, Users, Activity, Key, Settings, LogOut, ExternalLink, MessageSquare } from 'lucide-react';
+import { Shield, Users, Activity, Key, Settings, LogOut, ExternalLink, MessageSquare, Share2 } from 'lucide-react';
 import Notifications from '../../components/Notifications';
 import { auth, db, handleFirestoreError, OperationType } from '../../firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { collection, query, getDocs, addDoc, orderBy, limit, getDoc, doc, serverTimestamp } from 'firebase/firestore';
+import { collection, query, getDocs, addDoc, orderBy, limit, getDoc, doc, serverTimestamp, onSnapshot, where } from 'firebase/firestore';
 
 export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState('browser');
@@ -12,52 +12,60 @@ export default function AdminDashboard() {
   const [signals, setSignals] = useState<any[]>([]);
   const [codes, setCodes] = useState<any[]>([]);
   const [settings, setSettings] = useState<any[]>([]);
+  const [webhookSecret, setWebhookSecret] = useState('');
   const [newCode, setNewCode] = useState('');
   const [broadcastMessage, setBroadcastMessage] = useState('');
   const [sendingBroadcast, setSendingBroadcast] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const navigate = useNavigate();
 
+  const fetchData = async () => {
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const headers = { 'Authorization': `Bearer ${token}` };
+
+      if (activeTab === 'signals') {
+        const response = await fetch('/api/admin/signals', { headers });
+        if (response.ok) {
+          setSignals(await response.json());
+        }
+      } else if (activeTab === 'settings' || activeTab === 'webhooks') {
+        const response = await fetch('/api/admin/settings', { headers });
+        if (response.ok) {
+          const data = await response.json();
+          if (!data.find((s: any) => s.key === 'pocket_option_api_key')) {
+            data.push({ key: 'pocket_option_api_key', value: '' });
+          }
+          setSettings(data);
+          
+          const secret = data.find((s: any) => s.key === 'webhook_secret')?.value;
+          if (secret) setWebhookSecret(secret);
+        }
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   useEffect(() => {
     let unsubscribeUsers: () => void;
     let unsubscribeCodes: () => void;
 
-    const fetchData = async () => {
-      try {
-        const token = await auth.currentUser?.getIdToken();
-        const headers = { 'Authorization': `Bearer ${token}` };
-
-        if (activeTab === 'users') {
-          const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
-          unsubscribeUsers = onSnapshot(q, (snapshot) => {
-            setUsers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-          }, (error) => {
-            handleFirestoreError(error, OperationType.LIST, 'users');
-          });
-        } else if (activeTab === 'signals') {
-          const response = await fetch('/api/admin/signals', { headers });
-          if (response.ok) {
-            setSignals(await response.json());
-          }
-        } else if (activeTab === 'codes') {
-          const q = query(collection(db, 'access_codes'), orderBy('createdAt', 'desc'));
-          unsubscribeCodes = onSnapshot(q, (snapshot) => {
-            setCodes(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-          }, (error) => {
-            handleFirestoreError(error, OperationType.LIST, 'access_codes');
-          });
-        } else if (activeTab === 'settings') {
-          const response = await fetch('/api/admin/settings', { headers });
-          if (response.ok) {
-            const data = await response.json();
-            if (!data.find((s: any) => s.key === 'pocket_option_api_key')) {
-              data.push({ key: 'pocket_option_api_key', value: '' });
-            }
-            setSettings(data);
-          }
-        }
-      } catch (err) {
-        console.error(err);
+    const setupSubscriptions = async () => {
+      if (activeTab === 'users') {
+        const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
+        unsubscribeUsers = onSnapshot(q, (snapshot) => {
+          setUsers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+        }, (error) => {
+          handleFirestoreError(error, OperationType.LIST, 'users');
+        });
+      } else if (activeTab === 'codes') {
+        const q = query(collection(db, 'access_codes'), orderBy('createdAt', 'desc'));
+        unsubscribeCodes = onSnapshot(q, (snapshot) => {
+          setCodes(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+        }, (error) => {
+          handleFirestoreError(error, OperationType.LIST, 'access_codes');
+        });
       }
     };
 
@@ -71,6 +79,7 @@ export default function AdminDashboard() {
           } else {
             setCurrentUser({ ...user, ...userData });
             fetchData();
+            setupSubscriptions();
           }
         } catch (error) {
           handleFirestoreError(error, OperationType.GET, 'users/' + user.uid);
@@ -214,6 +223,9 @@ export default function AdminDashboard() {
           <button onClick={() => setActiveTab('broadcast')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'broadcast' ? 'bg-indigo-500/10 text-indigo-400' : 'hover:bg-slate-800'}`}>
             <MessageSquare className="w-5 h-5" /> Broadcast
           </button>
+          <button onClick={() => setActiveTab('webhooks')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'webhooks' ? 'bg-indigo-500/10 text-indigo-400' : 'hover:bg-slate-800'}`}>
+            <Share2 className="w-5 h-5" /> Webhooks
+          </button>
           <button onClick={() => setActiveTab('settings')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'settings' ? 'bg-indigo-500/10 text-indigo-400' : 'hover:bg-slate-800'}`}>
             <Settings className="w-5 h-5" /> Settings
           </button>
@@ -292,6 +304,7 @@ export default function AdminDashboard() {
                   <tr>
                     <th className="p-4">Time</th>
                     <th className="p-4">User</th>
+                    <th className="p-4">Source</th>
                     <th className="p-4">Asset</th>
                     <th className="p-4">Timeframe</th>
                     <th className="p-4">Signal</th>
@@ -302,6 +315,11 @@ export default function AdminDashboard() {
                     <tr key={s.id} className="hover:bg-slate-800/50">
                       <td className="p-4 text-slate-400">{new Date(s.created_at).toLocaleString()}</td>
                       <td className="p-4 font-medium text-white">{s.username}</td>
+                      <td className="p-4">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${s.source === 'Manual' ? 'bg-slate-700 text-slate-400' : 'bg-indigo-500/20 text-indigo-400'}`}>
+                          {s.source || 'Manual'}
+                        </span>
+                      </td>
                       <td className="p-4">{s.asset}</td>
                       <td className="p-4">{s.timeframe}</td>
                       <td className="p-4">
@@ -384,6 +402,83 @@ export default function AdminDashboard() {
                   {sendingBroadcast ? 'Sending...' : 'Send Broadcast'}
                 </button>
               </form>
+            </div>
+          )}
+
+          {activeTab === 'webhooks' && (
+            <div className="space-y-8 max-w-4xl">
+              <div className="bg-slate-900 p-6 rounded-xl border border-slate-800">
+                <h3 className="text-xl font-semibold text-white mb-4">Webhook Configuration</h3>
+                <p className="text-slate-400 mb-6">Use these details to connect TradingView, MT4, or MT5 to your signal bot.</p>
+                
+                <div className="space-y-4">
+                  <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Webhook URL</label>
+                    <div className="flex items-center justify-between">
+                      <code className="text-emerald-400 font-mono text-sm">{window.location.origin}/api/webhooks/[SOURCE]</code>
+                      <button 
+                        onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/api/webhooks/tradingview`); alert('URL copied!'); }}
+                        className="text-indigo-400 hover:text-indigo-300 text-xs font-medium"
+                      >
+                        Copy
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-slate-500 mt-2 italic">Replace [SOURCE] with tradingview, mt4, or mt5.</p>
+                  </div>
+
+                  <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Webhook Secret</label>
+                    <div className="flex items-center justify-between">
+                      <code className="text-emerald-400 font-mono text-sm">{webhookSecret}</code>
+                      <button 
+                        onClick={() => { navigator.clipboard.writeText(webhookSecret); alert('Secret copied!'); }}
+                        className="text-indigo-400 hover:text-indigo-300 text-xs font-medium"
+                      >
+                        Copy
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid md:grid-cols-2 gap-6">
+                <div className="bg-slate-900 p-6 rounded-xl border border-slate-800">
+                  <h4 className="text-white font-medium mb-4 flex items-center gap-2">
+                    <img src="https://www.tradingview.com/static/images/favicon.ico" className="w-4 h-4" alt="" />
+                    TradingView Setup
+                  </h4>
+                  <ol className="text-sm text-slate-400 space-y-3 list-decimal ml-4">
+                    <li>Create an Alert on any chart.</li>
+                    <li>Set the <strong>Webhook URL</strong> to the one above.</li>
+                    <li>In the <strong>Message</strong> box, paste this JSON:</li>
+                  </ol>
+                  <pre className="mt-4 bg-slate-950 p-3 rounded text-[10px] text-emerald-500 font-mono overflow-x-auto">
+{`{
+  "secret": "${webhookSecret}",
+  "asset": "{{ticker}}",
+  "signal": "{{strategy.order.action}}",
+  "timeframe": "{{interval}}",
+  "price": "{{close}}"
+}`}
+                  </pre>
+                </div>
+
+                <div className="bg-slate-900 p-6 rounded-xl border border-slate-800">
+                  <h4 className="text-white font-medium mb-4 flex items-center gap-2">
+                    MT4 / MT5 Setup
+                  </h4>
+                  <p className="text-sm text-slate-400 mb-4">
+                    Use an "Expert Advisor" (EA) or a script that can send HTTP POST requests.
+                  </p>
+                  <p className="text-xs text-slate-500 mb-4">
+                    Send a POST request to: <br/>
+                    <code className="text-indigo-400">{window.location.origin}/api/webhooks/mt4</code>
+                  </p>
+                  <p className="text-sm text-slate-400">
+                    Payload must include the <code>secret</code>, <code>asset</code>, and <code>signal</code> (Buy/Sell).
+                  </p>
+                </div>
+              </div>
             </div>
           )}
 

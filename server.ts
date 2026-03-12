@@ -84,6 +84,7 @@ if (db) {
       signal TEXT,
       user_id TEXT,
       username TEXT,
+      source TEXT DEFAULT 'Manual',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
     
@@ -116,6 +117,10 @@ if (db) {
     db.exec(`ALTER TABLE signals ADD COLUMN username TEXT;`);
   } catch (e) {}
 
+  try {
+    db.exec(`ALTER TABLE signals ADD COLUMN source TEXT DEFAULT 'Manual';`);
+  } catch (e) {}
+
   // Seed Admin User and Settings
   const adminExists = db.prepare('SELECT * FROM users WHERE role = ?').get('admin');
   if (!adminExists) {
@@ -131,6 +136,11 @@ if (db) {
   const apiKeyExists = db.prepare('SELECT * FROM settings WHERE key = ?').get('pocket_option_api_key');
   if (!apiKeyExists) {
     db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('pocket_option_api_key', '');
+  }
+
+  const webhookSecretExists = db.prepare('SELECT * FROM settings WHERE key = ?').get('webhook_secret');
+  if (!webhookSecretExists) {
+    db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('webhook_secret', Math.random().toString(36).substring(2, 15));
   }
 }
 
@@ -170,6 +180,65 @@ const requireAdmin = (req: any, res: any, next: any) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
   next();
 };
+
+// Webhook Routes
+app.post('/api/webhooks/:source', (req, res) => {
+  const { source } = req.params;
+  const { secret, asset, timeframe, signal, price, type } = req.body;
+
+  const webhookSecret = db.prepare('SELECT value FROM settings WHERE key = ?').get('webhook_secret') as { value: string };
+  
+  if (secret !== webhookSecret?.value) {
+    return res.status(401).json({ error: 'Invalid webhook secret' });
+  }
+
+  if (!asset || !signal) {
+    return res.status(400).json({ error: 'Asset and signal are required' });
+  }
+
+  const newSignal = {
+    id: Date.now(),
+    asset,
+    timeframe: timeframe || 'N/A',
+    signal,
+    price: price || 'N/A',
+    type: type || 'N/A',
+    source: source.toUpperCase(),
+    username: 'System',
+    created_at: new Date().toISOString()
+  };
+
+  // Store in DB
+  try {
+    db.prepare('INSERT INTO signals (asset, timeframe, signal, source, username) VALUES (?, ?, ?, ?, ?)').run(
+      asset, 
+      timeframe || 'N/A', 
+      signal, 
+      source.toUpperCase(), 
+      'System'
+    );
+  } catch (err) {
+    console.error('Failed to store webhook signal:', err);
+  }
+
+  io.emit('new_signal', newSignal);
+  
+  // Create broadcast notification
+  try {
+    const msg = `${asset} - ${signal} (${timeframe || 'N/A'}) from ${source.toUpperCase()}`;
+    db.prepare('INSERT INTO notifications (title, message, type) VALUES (?, ?, ?)').run(`New ${source.toUpperCase()} Signal`, msg, 'broadcast');
+    io.emit('broadcast_notification', {
+      title: `New ${source.toUpperCase()} Signal`,
+      message: msg,
+      type: 'broadcast',
+      created_at: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Failed to create webhook notification:', err);
+  }
+
+  res.json({ success: true });
+});
 
 // API Routes
 app.post('/api/auth/signup', (req, res) => {
@@ -371,7 +440,7 @@ app.get('/api/admin/users', authenticateToken, requireAdmin, (req, res) => {
 
 app.get('/api/admin/signals', authenticateToken, requireAdmin, (req, res) => {
   const signals = db.prepare(`
-    SELECT id, asset, timeframe, signal, created_at, user_id, username
+    SELECT id, asset, timeframe, signal, created_at, user_id, username, source
     FROM signals
     ORDER BY created_at DESC
   `).all();
