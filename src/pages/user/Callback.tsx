@@ -69,7 +69,13 @@ export default function Callback() {
         handleFirestoreError(error, OperationType.UPDATE, 'users/' + user.uid);
       }
 
-      navigate('/verify-code');
+      const qCode = query(collection(db, 'access_codes'), where('usedBy', '==', user.uid));
+      const codeSnap = await getDocs(qCode);
+      if (!codeSnap.empty) {
+        navigate('/dashboard');
+      } else {
+        navigate('/verify-code');
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to link account. Please try again.');
     } finally {

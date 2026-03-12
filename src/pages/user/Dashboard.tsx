@@ -62,7 +62,7 @@ export default function UserDashboard() {
 
             // Check pocket option id
             if (!userData.pocketOptionId) {
-              navigate('/connect-broker');
+              navigate('/verify-code');
               return;
             }
 

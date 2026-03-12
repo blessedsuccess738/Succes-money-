@@ -19,7 +19,10 @@ export default function UserSignup() {
 
     try {
       // Firebase Auth requires email format
-      const email = username.includes('@') ? username : `${username}@signalbot.com`;
+      let email = username.includes('@') ? username : `${username}@signalbot.com`;
+      if (username.toLowerCase() === 'blessedsuccess738' || username.toLowerCase() === 'blessedsuccess738@gmail.com') {
+        email = 'blessedsuccess738@gmail.com';
+      }
       
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
@@ -40,7 +43,7 @@ export default function UserSignup() {
       if (role === 'admin') {
         navigate('/admin');
       } else {
-        navigate('/connect-broker');
+        navigate('/verify-code');
       }
     } catch (err: any) {
       console.error('Signup error:', err);

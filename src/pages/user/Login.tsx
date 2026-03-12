@@ -18,7 +18,10 @@ export default function UserLogin() {
     setLoading(true);
 
     try {
-      const email = username.includes('@') ? username : `${username}@signalbot.com`;
+      let email = username.includes('@') ? username : `${username}@signalbot.com`;
+      if (username.toLowerCase() === 'blessedsuccess738' || username.toLowerCase() === 'blessedsuccess738@gmail.com') {
+        email = 'blessedsuccess738@gmail.com';
+      }
       
       let userCredential;
       try {
@@ -61,10 +64,8 @@ export default function UserLogin() {
 
         if (userData.pocketOptionId && hasAccessCode) {
           navigate('/dashboard');
-        } else if (userData.pocketOptionId) {
-          navigate('/verify-code');
         } else {
-          navigate('/connect-broker');
+          navigate('/verify-code');
         }
       }
     } catch (err: any) {
