@@ -19,7 +19,28 @@ export default function UserLogin() {
 
     try {
       const email = username.includes('@') ? username : `${username}@signalbot.com`;
-      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      
+      let userCredential;
+      try {
+        userCredential = await signInWithEmailAndPassword(auth, email, password);
+      } catch (signInErr: any) {
+        // Auto-create admin if it doesn't exist
+        if ((signInErr.code === 'auth/user-not-found' || signInErr.code === 'auth/invalid-credential') && email.toLowerCase() === 'blessedsuccess738@gmail.com' && password === 'Blessed2007@') {
+          const { createUserWithEmailAndPassword } = await import('firebase/auth');
+          const { setDoc, serverTimestamp } = await import('firebase/firestore');
+          userCredential = await createUserWithEmailAndPassword(auth, email, password);
+          await setDoc(doc(db, 'users', userCredential.user.uid), {
+            username: 'Admin',
+            email: email,
+            role: 'admin',
+            createdAt: serverTimestamp(),
+            ipAddress: 'unknown'
+          });
+        } else {
+          throw signInErr;
+        }
+      }
+      
       const user = userCredential.user;
 
       // Get user profile
@@ -38,10 +59,12 @@ export default function UserLogin() {
         const codeSnap = await getDocs(q);
         const hasAccessCode = !codeSnap.empty;
 
-        if (hasAccessCode) {
+        if (userData.pocketOptionId && hasAccessCode) {
           navigate('/dashboard');
-        } else {
+        } else if (userData.pocketOptionId) {
           navigate('/verify-code');
+        } else {
+          navigate('/connect-broker');
         }
       }
     } catch (err: any) {

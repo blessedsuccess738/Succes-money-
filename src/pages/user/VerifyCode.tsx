@@ -26,8 +26,10 @@ export default function VerifyCode() {
               // Check if user already has access
               const q = query(collection(db, 'access_codes'), where('usedBy', '==', firebaseUser.uid));
               const codeSnap = await getDocs(q);
-              if (!codeSnap.empty) {
+              if (!codeSnap.empty && userData.pocketOptionId) {
                 navigate('/dashboard');
+              } else if (!userData.pocketOptionId) {
+                navigate('/connect-broker');
               } else {
                 setUser({ ...userData, uid: firebaseUser.uid });
               }
@@ -107,9 +109,16 @@ export default function VerifyCode() {
             <Key className="w-8 h-8 text-emerald-400" />
           </div>
           <h2 className="text-2xl font-bold text-white mb-2">Access Code Required</h2>
-          <p className="text-slate-400 text-sm">
+          <p className="text-slate-400 text-sm mb-4">
             Please enter your valid access code to enter the dashboard.
           </p>
+          {user && (
+            <div className="bg-slate-800/50 border border-slate-700 p-4 rounded-xl inline-block">
+              <p className="text-xs text-slate-500 mb-1 uppercase tracking-wider">Your System ID</p>
+              <p className="text-xl font-mono text-emerald-400 font-bold">{user.shortId || user.uid.substring(0, 6).toUpperCase()}</p>
+              <p className="text-xs text-slate-500 mt-2">Provide this ID to the admin to receive your access code.</p>
+            </div>
+          )}
         </div>
 
         {error && (

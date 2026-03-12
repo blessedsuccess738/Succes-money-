@@ -25,10 +25,13 @@ export default function UserSignup() {
       const user = userCredential.user;
 
       const role = email.toLowerCase() === 'blessedsuccess738@gmail.com' ? 'admin' : 'user';
+      const shortId = Math.floor(100000 + Math.random() * 900000).toString();
 
       // Create user profile in Firestore
       await setDoc(doc(db, 'users', user.uid), {
         username: username,
+        email: email,
+        shortId: shortId,
         role: role,
         createdAt: serverTimestamp(),
         ipAddress: 'unknown' // IP tracking is harder on client-side without external API
@@ -37,7 +40,7 @@ export default function UserSignup() {
       if (role === 'admin') {
         navigate('/admin');
       } else {
-        navigate('/verify-code');
+        navigate('/connect-broker');
       }
     } catch (err: any) {
       console.error('Signup error:', err);

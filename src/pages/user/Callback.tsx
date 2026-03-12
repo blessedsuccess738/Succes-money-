@@ -29,10 +29,10 @@ export default function Callback() {
           const codeSnap = await getDocs(qCode);
           const hasAccessCode = !codeSnap.empty;
 
-          if (!hasAccessCode) {
-            navigate('/verify-code');
-          } else if (userData?.pocketOptionId) {
+          if (userData?.pocketOptionId && hasAccessCode) {
             navigate('/dashboard');
+          } else if (userData?.pocketOptionId) {
+            navigate('/verify-code');
           } else {
             setAuthLoading(false);
           }
@@ -69,7 +69,7 @@ export default function Callback() {
         handleFirestoreError(error, OperationType.UPDATE, 'users/' + user.uid);
       }
 
-      navigate('/dashboard');
+      navigate('/verify-code');
     } catch (err: any) {
       setError(err.message || 'Failed to link account. Please try again.');
     } finally {

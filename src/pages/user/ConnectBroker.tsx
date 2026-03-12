@@ -7,15 +7,17 @@ import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firesto
 
 export default function ConnectBroker() {
   const [loading, setLoading] = useState(true);
+  const [userData, setUserData] = useState<any>(null);
   const navigate = useNavigate();
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         const userDoc = await getDoc(doc(db, 'users', user.uid));
-        const userData = userDoc.data();
+        const data = userDoc.data();
+        setUserData(data);
         
-        if (userData?.role === 'admin') {
+        if (data?.role === 'admin') {
           navigate('/admin');
           return;
         }
@@ -25,10 +27,10 @@ export default function ConnectBroker() {
         const codeSnap = await getDocs(qCode);
         const hasAccessCode = !codeSnap.empty;
 
-        if (!hasAccessCode) {
-          navigate('/verify-code');
-        } else if (userData?.pocketOptionId) {
+        if (data?.pocketOptionId && hasAccessCode) {
           navigate('/dashboard');
+        } else if (data?.pocketOptionId) {
+          navigate('/verify-code');
         } else {
           setLoading(false);
         }
@@ -61,6 +63,16 @@ export default function ConnectBroker() {
         </div>
         
         <h1 className="text-2xl font-bold text-white mb-4">Connect Trading Account</h1>
+        
+        {auth.currentUser && (
+          <div className="bg-slate-900/50 border border-slate-700 p-4 rounded-xl mb-6 inline-block">
+            <p className="text-xs text-slate-500 mb-1 uppercase tracking-wider">Your System ID</p>
+            <p className="text-xl font-mono text-indigo-400 font-bold">
+              {userData?.shortId || auth.currentUser.uid.substring(0, 6).toUpperCase()}
+            </p>
+          </div>
+        )}
+
         <p className="text-slate-400 mb-8">
           To use the real-time signal dashboard, you must first link your Pocket Option account. 
           Click the button below to sign up or log in securely.

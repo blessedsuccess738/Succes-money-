@@ -19,7 +19,49 @@ export default function AdminDashboard() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    let unsubscribeUsers: () => void;
+    let unsubscribeCodes: () => void;
+
+    const fetchData = async () => {
+      try {
+        const token = await auth.currentUser?.getIdToken();
+        const headers = { 'Authorization': `Bearer ${token}` };
+
+        if (activeTab === 'users') {
+          const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
+          unsubscribeUsers = onSnapshot(q, (snapshot) => {
+            setUsers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+          }, (error) => {
+            handleFirestoreError(error, OperationType.LIST, 'users');
+          });
+        } else if (activeTab === 'signals') {
+          const response = await fetch('/api/admin/signals', { headers });
+          if (response.ok) {
+            setSignals(await response.json());
+          }
+        } else if (activeTab === 'codes') {
+          const q = query(collection(db, 'access_codes'), orderBy('createdAt', 'desc'));
+          unsubscribeCodes = onSnapshot(q, (snapshot) => {
+            setCodes(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+          }, (error) => {
+            handleFirestoreError(error, OperationType.LIST, 'access_codes');
+          });
+        } else if (activeTab === 'settings') {
+          const response = await fetch('/api/admin/settings', { headers });
+          if (response.ok) {
+            const data = await response.json();
+            if (!data.find((s: any) => s.key === 'pocket_option_api_key')) {
+              data.push({ key: 'pocket_option_api_key', value: '' });
+            }
+            setSettings(data);
+          }
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    };
+
+    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       if (user) {
         try {
           const userDoc = await getDoc(doc(db, 'users', user.uid));
@@ -37,47 +79,40 @@ export default function AdminDashboard() {
         navigate('/meta');
       }
     });
-    return () => unsubscribe();
+
+    return () => {
+      unsubscribeAuth();
+      if (unsubscribeUsers) unsubscribeUsers();
+      if (unsubscribeCodes) unsubscribeCodes();
+    };
   }, [activeTab, navigate]);
 
-  const fetchData = async () => {
+  const generateCodeForUser = async (shortId: string) => {
+    if (!shortId) {
+      alert('User does not have a Short ID.');
+      return;
+    }
     try {
-      const token = await auth.currentUser?.getIdToken();
-      const headers = { 'Authorization': `Bearer ${token}` };
-
-      if (activeTab === 'users') {
-        const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
-        try {
-          const snapshot = await getDocs(q);
-          setUsers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-        } catch (error) {
-          handleFirestoreError(error, OperationType.LIST, 'users');
-        }
-      } else if (activeTab === 'signals') {
-        const response = await fetch('/api/admin/signals', { headers });
-        if (response.ok) {
-          setSignals(await response.json());
-        }
-      } else if (activeTab === 'codes') {
-        const q = query(collection(db, 'access_codes'), orderBy('createdAt', 'desc'));
-        try {
-          const snapshot = await getDocs(q);
-          setCodes(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-        } catch (error) {
-          handleFirestoreError(error, OperationType.LIST, 'access_codes');
-        }
-      } else if (activeTab === 'settings') {
-        const response = await fetch('/api/admin/settings', { headers });
-        if (response.ok) {
-          const data = await response.json();
-          if (!data.find((s: any) => s.key === 'pocket_option_api_key')) {
-            data.push({ key: 'pocket_option_api_key', value: '' });
-          }
-          setSettings(data);
-        }
+      const q = query(collection(db, 'access_codes'), where('code', '==', shortId));
+      const existing = await getDocs(q);
+      if (!existing.empty) {
+        alert('Code already generated for this user.');
+        setNewCode(shortId);
+        setActiveTab('codes');
+        return;
       }
-    } catch (err) {
-      console.error(err);
+
+      await addDoc(collection(db, 'access_codes'), {
+        code: shortId,
+        isUsed: false,
+        usedBy: null,
+        usedByUsername: null,
+        createdAt: serverTimestamp()
+      });
+      setNewCode(shortId);
+      setActiveTab('codes');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'access_codes');
     }
   };
 
@@ -213,19 +248,20 @@ export default function AdminDashboard() {
               <table className="w-full text-left text-sm">
                 <thead className="bg-slate-800 text-slate-400">
                   <tr>
-                    <th className="p-4">ID</th>
-                    <th className="p-4">Username</th>
+                    <th className="p-4">Short ID</th>
+                    <th className="p-4">Email</th>
                     <th className="p-4">Role</th>
                     <th className="p-4">Pocket Option ID</th>
                     <th className="p-4">IP Address</th>
                     <th className="p-4">Joined</th>
+                    <th className="p-4">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800">
                   {users.map((u: any) => (
                     <tr key={u.id} className="hover:bg-slate-800/50">
-                      <td className="p-4">{u.id}</td>
-                      <td className="p-4 font-medium text-white">{u.username}</td>
+                      <td className="p-4 font-mono text-emerald-400">{u.shortId || u.id.substring(0, 6).toUpperCase()}</td>
+                      <td className="p-4 font-medium text-white">{u.email || u.username}</td>
                       <td className="p-4">
                         <span className={`px-2 py-1 rounded text-xs ${u.role === 'admin' ? 'bg-indigo-500/20 text-indigo-400' : 'bg-slate-700 text-slate-300'}`}>
                           {u.role}
@@ -234,6 +270,14 @@ export default function AdminDashboard() {
                       <td className="p-4 font-mono text-emerald-400">{u.pocketOptionId || 'Not Linked'}</td>
                       <td className="p-4 font-mono text-slate-400">{u.ipAddress || 'N/A'}</td>
                       <td className="p-4 text-slate-400">{u.createdAt?.toDate ? u.createdAt.toDate().toLocaleString() : 'N/A'}</td>
+                      <td className="p-4">
+                        <button
+                          onClick={() => generateCodeForUser(u.shortId || u.id.substring(0, 6).toUpperCase())}
+                          className="bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500 hover:text-white px-3 py-1 rounded transition-colors text-sm"
+                        >
+                          Generate Code
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
