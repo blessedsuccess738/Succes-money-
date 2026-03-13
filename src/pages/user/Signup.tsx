@@ -74,7 +74,7 @@ export default function UserSignup() {
       if (err.code === 'auth/email-already-in-use') {
         setError('Username or email already exists');
       } else if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
-        setError('This account already exists. Please enter the correct password.');
+        setError('This account already exists. Please enter the correct password, or use "Continue with Google" if you signed up with Google.');
       } else if (err.code === 'auth/weak-password') {
         setError('Password should be at least 6 characters');
       } else if (err.code === 'auth/invalid-email') {

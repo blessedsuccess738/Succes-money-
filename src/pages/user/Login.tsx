@@ -27,18 +27,24 @@ export default function UserLogin() {
       try {
         userCredential = await signInWithEmailAndPassword(auth, email, password);
       } catch (signInErr: any) {
-        // Auto-create admin if it doesn't exist
         if ((signInErr.code === 'auth/user-not-found' || signInErr.code === 'auth/invalid-credential') && email.toLowerCase() === 'blessedsuccess738@gmail.com' && password === 'Blessed2007@') {
-          const { createUserWithEmailAndPassword } = await import('firebase/auth');
-          const { setDoc, serverTimestamp } = await import('firebase/firestore');
-          userCredential = await createUserWithEmailAndPassword(auth, email, password);
-          await setDoc(doc(db, 'users', userCredential.user.uid), {
-            username: 'Admin',
-            email: email,
-            role: 'admin',
-            createdAt: serverTimestamp(),
-            ipAddress: 'unknown'
-          });
+          try {
+            const { createUserWithEmailAndPassword } = await import('firebase/auth');
+            const { setDoc, serverTimestamp } = await import('firebase/firestore');
+            userCredential = await createUserWithEmailAndPassword(auth, email, password);
+            await setDoc(doc(db, 'users', userCredential.user.uid), {
+              username: 'Admin',
+              email: email,
+              role: 'admin',
+              createdAt: serverTimestamp(),
+              ipAddress: 'unknown'
+            });
+          } catch (createErr: any) {
+            if (createErr.code === 'auth/email-already-in-use') {
+              throw new Error('This account is linked to Google. Please use the "Continue with Google" button below.');
+            }
+            throw createErr;
+          }
         } else {
           throw signInErr;
         }

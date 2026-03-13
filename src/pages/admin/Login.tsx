@@ -31,7 +31,11 @@ export default function AdminLogin() {
         setError('Admin access denied');
       }
     } catch (err: any) {
-      setError(err.message || 'Authentication failed');
+      if (err.code === 'auth/invalid-credential' && username.toLowerCase().includes('blessedsuccess738')) {
+        setError('Invalid password. If you signed up with Google, please use the "Continue with Google" button below.');
+      } else {
+        setError(err.message || 'Authentication failed');
+      }
     } finally {
       setLoading(false);
     }

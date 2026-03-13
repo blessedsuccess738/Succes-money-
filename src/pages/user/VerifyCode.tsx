@@ -153,13 +153,11 @@ export default function VerifyCode() {
 
             <button
               type="submit"
-              disabled={loading || !accessCode || !user?.pocketOptionId}
+              disabled={loading || !accessCode}
               className="w-full bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-800 disabled:text-slate-500 text-white font-medium py-3 rounded-xl transition-all flex items-center justify-center gap-2"
             >
               {loading ? (
                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              ) : !user?.pocketOptionId ? (
-                'Connect Pocket Option First'
               ) : (
                 'Verify Code'
               )}
