@@ -68,6 +68,8 @@ if (db) {
       ip_address TEXT,
       trade_count INTEGER DEFAULT 0,
       level TEXT DEFAULT 'Rookie',
+      balance REAL DEFAULT 0,
+      is_live_synced BOOLEAN DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -345,6 +347,16 @@ app.post('/api/auth/verify-code', authenticateToken, (req: any, res) => {
   }
 });
 
+app.get('/api/user/profile', authenticateToken, (req: any, res) => {
+  try {
+    const user = db.prepare('SELECT trade_count, level, balance, is_live_synced, pocket_option_id FROM users WHERE id = ?').get(req.user.id) as any;
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch profile' });
+  }
+});
+
 app.post('/api/auth/pocket-option', authenticateToken, (req: any, res) => {
   const { pocketOptionId } = req.body;
   if (!pocketOptionId) return res.status(400).json({ error: 'Pocket Option ID is required' });
@@ -365,6 +377,34 @@ app.post('/api/auth/pocket-option', authenticateToken, (req: any, res) => {
     res.json({ success: true, message: 'Pocket Option ID linked successfully' });
   } catch (err) {
     res.status(500).json({ error: 'Failed to link account' });
+  }
+});
+
+app.post('/api/sync/start', authenticateToken, (req: any, res) => {
+  try {
+    db.prepare('UPDATE users SET is_live_synced = 1, balance = ? WHERE id = ?').run(1000 + Math.random() * 5000, req.user.id);
+    
+    const user = db.prepare('SELECT balance, level FROM users WHERE id = ?').get(req.user.id) as any;
+    
+    io.to(`user_${req.user.id}`).emit('sync_status', { 
+      is_live_synced: true, 
+      balance: user.balance,
+      status: 'Connected'
+    });
+
+    res.json({ success: true, balance: user.balance });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to start sync' });
+  }
+});
+
+app.post('/api/sync/stop', authenticateToken, (req: any, res) => {
+  try {
+    db.prepare('UPDATE users SET is_live_synced = 0 WHERE id = ?').run(req.user.id);
+    io.to(`user_${req.user.id}`).emit('sync_status', { is_live_synced: false, status: 'Disconnected' });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to stop sync' });
   }
 });
 
@@ -530,6 +570,22 @@ io.on('connection', (socket) => {
     io.emit('view_synced', data);
   });
 });
+
+// Background Balance Sync Simulation
+setInterval(() => {
+  try {
+    const syncedUsers = db.prepare('SELECT id, balance FROM users WHERE is_live_synced = 1').all() as any[];
+    syncedUsers.forEach(user => {
+      // Simulate small balance fluctuations (market movement)
+      const change = (Math.random() * 10 - 5);
+      const newBalance = Math.max(0, user.balance + change);
+      db.prepare('UPDATE users SET balance = ? WHERE id = ?').run(newBalance, user.id);
+      io.to(`user_${user.id}`).emit('balance_update', { balance: newBalance });
+    });
+  } catch (err) {
+    // Silent error for background task
+  }
+}, 5000);
 
 export default app;
 

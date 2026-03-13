@@ -1,72 +1,66 @@
 import { useState, useEffect, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Shield, Users, Activity, Key, Settings, LogOut, ExternalLink, MessageSquare, Share2 } from 'lucide-react';
+import { Shield, Users, Activity, Key, Settings, LogOut, ExternalLink, MessageSquare, Share2, LayoutDashboard, Globe, Power, Trash2, Crown, Ban, CheckCircle2, TrendingUp, TrendingDown } from 'lucide-react';
 import Notifications from '../../components/Notifications';
 import { auth, db, handleFirestoreError, OperationType } from '../../firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { collection, query, getDocs, addDoc, orderBy, limit, getDoc, doc, serverTimestamp, onSnapshot, where } from 'firebase/firestore';
+import { collection, query, getDocs, addDoc, orderBy, limit, getDoc, doc, serverTimestamp, onSnapshot, where, updateDoc, deleteDoc, setDoc } from 'firebase/firestore';
 
 export default function AdminDashboard() {
-  const [activeTab, setActiveTab] = useState('browser');
+  const [activeTab, setActiveTab] = useState('overview');
   const [users, setUsers] = useState<any[]>([]);
   const [signals, setSignals] = useState<any[]>([]);
   const [codes, setCodes] = useState<any[]>([]);
-  const [settings, setSettings] = useState<any[]>([]);
-  const [webhookSecret, setWebhookSecret] = useState('');
+  const [platformSettings, setPlatformSettings] = useState<any>({});
+  
+  // Access Code State
   const [newCode, setNewCode] = useState('');
+  const [codeDuration, setCodeDuration] = useState('30'); // days
+  
+  // Signal Broadcaster State
+  const [sigAsset, setSigAsset] = useState('EUR/USD');
+  const [sigTimeframe, setSigTimeframe] = useState('1m');
+  const [sigDirection, setSigDirection] = useState('Buy');
+  const [sendingSignal, setSendingSignal] = useState(false);
+
+  // Broadcast Message State
   const [broadcastMessage, setBroadcastMessage] = useState('');
   const [sendingBroadcast, setSendingBroadcast] = useState(false);
+  
   const [currentUser, setCurrentUser] = useState<any>(null);
   const navigate = useNavigate();
-
-  const fetchData = async () => {
-    try {
-      const token = await auth.currentUser?.getIdToken();
-      const headers = { 'Authorization': `Bearer ${token}` };
-
-      if (activeTab === 'signals') {
-        const response = await fetch('/api/admin/signals', { headers });
-        if (response.ok) {
-          setSignals(await response.json());
-        }
-      } else if (activeTab === 'settings' || activeTab === 'webhooks') {
-        const response = await fetch('/api/admin/settings', { headers });
-        if (response.ok) {
-          const data = await response.json();
-          if (!data.find((s: any) => s.key === 'pocket_option_api_key')) {
-            data.push({ key: 'pocket_option_api_key', value: '' });
-          }
-          setSettings(data);
-          
-          const secret = data.find((s: any) => s.key === 'webhook_secret')?.value;
-          if (secret) setWebhookSecret(secret);
-        }
-      }
-    } catch (err) {
-      console.error(err);
-    }
-  };
 
   useEffect(() => {
     let unsubscribeUsers: () => void;
     let unsubscribeCodes: () => void;
+    let unsubscribeSettings: () => void;
+    let unsubscribeSignals: () => void;
 
     const setupSubscriptions = async () => {
-      if (activeTab === 'users' || activeTab === 'browser') {
-        const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
-        unsubscribeUsers = onSnapshot(q, (snapshot) => {
-          setUsers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-        }, (error) => {
-          handleFirestoreError(error, OperationType.LIST, 'users');
-        });
-      } else if (activeTab === 'codes') {
-        const q = query(collection(db, 'access_codes'), orderBy('createdAt', 'desc'));
-        unsubscribeCodes = onSnapshot(q, (snapshot) => {
-          setCodes(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-        }, (error) => {
-          handleFirestoreError(error, OperationType.LIST, 'access_codes');
-        });
-      }
+      // Users
+      const qUsers = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
+      unsubscribeUsers = onSnapshot(qUsers, (snapshot) => {
+        setUsers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      }, (error) => handleFirestoreError(error, OperationType.LIST, 'users'));
+
+      // Codes
+      const qCodes = query(collection(db, 'access_codes'), orderBy('createdAt', 'desc'));
+      unsubscribeCodes = onSnapshot(qCodes, (snapshot) => {
+        setCodes(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      }, (error) => handleFirestoreError(error, OperationType.LIST, 'access_codes'));
+
+      // Platform Settings
+      unsubscribeSettings = onSnapshot(doc(db, 'settings', 'platform'), (docSnap) => {
+        if (docSnap.exists()) {
+          setPlatformSettings(docSnap.data());
+        }
+      });
+
+      // Signals
+      const qSignals = query(collection(db, 'signals'), orderBy('created_at', 'desc'), limit(50));
+      unsubscribeSignals = onSnapshot(qSignals, (snapshot) => {
+        setSignals(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      });
     };
 
     const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
@@ -78,7 +72,6 @@ export default function AdminDashboard() {
             navigate('/meta');
           } else {
             setCurrentUser({ ...user, ...userData });
-            fetchData();
             setupSubscriptions();
           }
         } catch (error) {
@@ -93,111 +86,115 @@ export default function AdminDashboard() {
       unsubscribeAuth();
       if (unsubscribeUsers) unsubscribeUsers();
       if (unsubscribeCodes) unsubscribeCodes();
+      if (unsubscribeSettings) unsubscribeSettings();
+      if (unsubscribeSignals) unsubscribeSignals();
     };
-  }, [activeTab, navigate]);
+  }, [navigate]);
 
-  const generateCodeForUser = async (shortId: string) => {
-    if (!shortId) {
-      alert('User does not have a Short ID.');
-      return;
-    }
-    try {
-      const q = query(collection(db, 'access_codes'), where('code', '==', shortId));
-      const existing = await getDocs(q);
-      if (!existing.empty) {
-        alert('Code already generated for this user.');
-        setNewCode(shortId);
-        setActiveTab('codes');
-        return;
-      }
-
-      await addDoc(collection(db, 'access_codes'), {
-        code: shortId,
-        isUsed: false,
-        usedBy: null,
-        usedByUsername: null,
-        createdAt: serverTimestamp()
-      });
-      setNewCode(shortId);
-      setActiveTab('codes');
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'access_codes');
-    }
-  };
-
+  // --- Access Codes ---
   const generateCode = async () => {
     const code = Math.random().toString(36).substring(2, 10).toUpperCase();
     try {
       await addDoc(collection(db, 'access_codes'), {
         code,
+        durationDays: codeDuration === 'lifetime' ? 9999 : parseInt(codeDuration),
         isUsed: false,
         usedBy: null,
         usedByUsername: null,
         createdAt: serverTimestamp()
       });
       setNewCode(code);
-      fetchData();
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'access_codes');
     }
   };
 
+  const revokeCode = async (id: string) => {
+    if (!window.confirm('Are you sure you want to revoke and delete this code?')) return;
+    try {
+      await deleteDoc(doc(db, 'access_codes', id));
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  // --- User Management ---
+  const toggleVIP = async (userId: string, currentLevel: string) => {
+    try {
+      const newLevel = currentLevel === 'Premium Member' ? 'Rookie' : 'Premium Member';
+      await updateDoc(doc(db, 'users', userId), { level: newLevel });
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  const toggleBan = async (userId: string, isBanned: boolean) => {
+    if (!window.confirm(`Are you sure you want to ${isBanned ? 'unban' : 'ban'} this user?`)) return;
+    try {
+      await updateDoc(doc(db, 'users', userId), { isBanned: !isBanned });
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  // --- Platform Settings ---
+  const savePlatformSettings = async (e: FormEvent) => {
+    e.preventDefault();
+    try {
+      await setDoc(doc(db, 'settings', 'platform'), platformSettings, { merge: true });
+      alert('Platform settings saved successfully!');
+    } catch (error) {
+      console.error(error);
+      alert('Failed to save settings.');
+    }
+  };
+
+  const toggleMasterKillSwitch = async () => {
+    const newValue = !platformSettings.masterKillSwitch;
+    if (newValue && !window.confirm('WARNING: This will instantly stop all auto-trading for all users. Proceed?')) return;
+    try {
+      await setDoc(doc(db, 'settings', 'platform'), { masterKillSwitch: newValue }, { merge: true });
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  // --- Signal Broadcaster ---
+  const broadcastSignal = async (e: FormEvent) => {
+    e.preventDefault();
+    setSendingSignal(true);
+    try {
+      await addDoc(collection(db, 'signals'), {
+        asset: sigAsset,
+        timeframe: sigTimeframe,
+        signal: sigDirection,
+        source: 'Manual Admin',
+        username: 'Admin',
+        created_at: new Date().toISOString(),
+        timestamp: serverTimestamp()
+      });
+      alert('Signal broadcasted to all users!');
+    } catch (error) {
+      console.error(error);
+      alert('Failed to broadcast signal.');
+    }
+    setSendingSignal(false);
+  };
+
+  // --- Logout ---
   const handleLogout = async () => {
     await signOut(auth);
     navigate('/meta');
   };
 
-  const handleBroadcast = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!broadcastMessage.trim()) return;
-    
-    setSendingBroadcast(true);
-    try {
-      const token = await auth.currentUser?.getIdToken();
-      const response = await fetch('/api/admin/broadcast', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({ message: broadcastMessage })
-      });
-      
-      if (response.ok) {
-        setBroadcastMessage('');
-        alert('Broadcast message sent successfully!');
-      } else {
-        alert('Failed to send broadcast');
-      }
-    } catch (error) {
-      console.error('Broadcast error:', error);
-      alert('Error sending broadcast');
-    }
-    setSendingBroadcast(false);
-  };
-
-  const updateSetting = async (key: string, value: string) => {
-    try {
-      const token = await auth.currentUser?.getIdToken();
-      const response = await fetch('/api/admin/settings', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({ key, value })
-      });
-      if (response.ok) {
-        alert('Setting updated successfully');
-        fetchData();
-      } else {
-        alert('Failed to update setting');
-      }
-    } catch (err) {
-      console.error(err);
-      alert('Error updating setting');
-    }
-  };
+  // --- Stats Calculations ---
+  const activeTradersCount = users.filter(u => u.is_live_synced).length;
+  const activeSubscriptions = codes.filter(c => c.isUsed).length;
+  const totalWins = users.reduce((sum, u) => sum + (u.win_count || 0), 0);
+  const totalLosses = users.reduce((sum, u) => sum + (u.loss_count || 0), 0);
+  const totalProfitAmount = users.reduce((sum, u) => sum + (u.total_profit || 0), 0);
+  const totalLossAmount = users.reduce((sum, u) => sum + (u.total_loss || 0), 0);
+  const globalWinRate = totalWins + totalLosses > 0 ? Math.round((totalWins / (totalWins + totalLosses)) * 100) : 0;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-300 flex">
@@ -207,27 +204,27 @@ export default function AdminDashboard() {
           <Shield className="w-8 h-8 text-indigo-500" />
           <h1 className="text-xl font-bold text-white">Admin Panel</h1>
         </div>
-        <nav className="flex-1 p-4 space-y-2">
-          <button onClick={() => setActiveTab('browser')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'browser' ? 'bg-indigo-500/10 text-indigo-400' : 'hover:bg-slate-800'}`}>
-            <ExternalLink className="w-5 h-5" /> Pocket Option
-          </button>
-          <button onClick={() => setActiveTab('users')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'users' ? 'bg-indigo-500/10 text-indigo-400' : 'hover:bg-slate-800'}`}>
-            <Users className="w-5 h-5" /> Users
-          </button>
-          <button onClick={() => setActiveTab('signals')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'signals' ? 'bg-indigo-500/10 text-indigo-400' : 'hover:bg-slate-800'}`}>
-            <Activity className="w-5 h-5" /> Signal Logs
+        <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
+          <button onClick={() => setActiveTab('overview')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'overview' ? 'bg-indigo-500/10 text-indigo-400' : 'hover:bg-slate-800'}`}>
+            <LayoutDashboard className="w-5 h-5" /> Overview
           </button>
           <button onClick={() => setActiveTab('codes')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'codes' ? 'bg-indigo-500/10 text-indigo-400' : 'hover:bg-slate-800'}`}>
             <Key className="w-5 h-5" /> Access Codes
           </button>
-          <button onClick={() => setActiveTab('broadcast')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'broadcast' ? 'bg-indigo-500/10 text-indigo-400' : 'hover:bg-slate-800'}`}>
-            <MessageSquare className="w-5 h-5" /> Broadcast
+          <button onClick={() => setActiveTab('users')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'users' ? 'bg-indigo-500/10 text-indigo-400' : 'hover:bg-slate-800'}`}>
+            <Users className="w-5 h-5" /> Users & VIP
           </button>
-          <button onClick={() => setActiveTab('webhooks')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'webhooks' ? 'bg-indigo-500/10 text-indigo-400' : 'hover:bg-slate-800'}`}>
-            <Share2 className="w-5 h-5" /> Webhooks
+          <button onClick={() => setActiveTab('signals')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'signals' ? 'bg-indigo-500/10 text-indigo-400' : 'hover:bg-slate-800'}`}>
+            <Activity className="w-5 h-5" /> Signal Broadcaster
           </button>
-          <button onClick={() => setActiveTab('settings')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'settings' ? 'bg-indigo-500/10 text-indigo-400' : 'hover:bg-slate-800'}`}>
-            <Settings className="w-5 h-5" /> Settings
+          <button onClick={() => setActiveTab('bot-engine')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'bot-engine' ? 'bg-indigo-500/10 text-indigo-400' : 'hover:bg-slate-800'}`}>
+            <Power className="w-5 h-5" /> Bot Engine
+          </button>
+          <button onClick={() => setActiveTab('platform')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'platform' ? 'bg-indigo-500/10 text-indigo-400' : 'hover:bg-slate-800'}`}>
+            <Globe className="w-5 h-5" /> Platform Links
+          </button>
+          <button onClick={() => setActiveTab('browser')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'browser' ? 'bg-indigo-500/10 text-indigo-400' : 'hover:bg-slate-800'}`}>
+            <ExternalLink className="w-5 h-5" /> Pocket Option
           </button>
         </nav>
         <div className="p-4 border-t border-slate-800">
@@ -245,6 +242,408 @@ export default function AdminDashboard() {
         </header>
         
         <div className="flex-1 overflow-auto p-6">
+          
+          {/* OVERVIEW TAB */}
+          {activeTab === 'overview' && (
+            <div className="space-y-6">
+              {/* Primary Stats */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 relative overflow-hidden">
+                  <div className="absolute top-0 right-0 w-16 h-16 bg-indigo-500/10 rounded-bl-full"></div>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-slate-400 font-medium">Total Users</h3>
+                    <Users className="w-6 h-6 text-indigo-400" />
+                  </div>
+                  <div className="text-3xl font-bold text-white">{users.length}</div>
+                  <p className="text-xs text-slate-500 mt-2">Registered accounts</p>
+                </div>
+                
+                <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 relative overflow-hidden">
+                  <div className="absolute top-0 right-0 w-16 h-16 bg-emerald-500/10 rounded-bl-full"></div>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-slate-400 font-medium">Total Profit (Wins)</h3>
+                    <TrendingUp className="w-6 h-6 text-emerald-400" />
+                  </div>
+                  <div className="text-3xl font-bold text-emerald-400">${totalProfitAmount.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
+                  <p className="text-xs text-slate-500 mt-2">Across {totalWins} winning trades</p>
+                </div>
+
+                <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 relative overflow-hidden">
+                  <div className="absolute top-0 right-0 w-16 h-16 bg-rose-500/10 rounded-bl-full"></div>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-slate-400 font-medium">Total Loss</h3>
+                    <TrendingDown className="w-6 h-6 text-rose-400" />
+                  </div>
+                  <div className="text-3xl font-bold text-rose-400">${totalLossAmount.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
+                  <p className="text-xs text-slate-500 mt-2">Across {totalLosses} losing trades</p>
+                </div>
+
+                <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 relative overflow-hidden">
+                  <div className="absolute top-0 right-0 w-16 h-16 bg-blue-500/10 rounded-bl-full"></div>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-slate-400 font-medium">Global Win Rate</h3>
+                    <Activity className="w-6 h-6 text-blue-400" />
+                  </div>
+                  <div className="text-3xl font-bold text-blue-400">{globalWinRate}%</div>
+                  <p className="text-xs text-slate-500 mt-2">Average platform accuracy</p>
+                </div>
+              </div>
+
+              {/* Secondary Stats */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="bg-slate-900 p-6 rounded-xl border border-slate-800">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-slate-400 font-medium">Active Subscriptions</h3>
+                    <Key className="w-5 h-5 text-emerald-400" />
+                  </div>
+                  <div className="text-2xl font-bold text-white">{activeSubscriptions}</div>
+                </div>
+                <div className="bg-slate-900 p-6 rounded-xl border border-slate-800">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-slate-400 font-medium">Live Auto-Traders</h3>
+                    <Power className="w-5 h-5 text-amber-400" />
+                  </div>
+                  <div className="text-2xl font-bold text-white">{activeTradersCount}</div>
+                </div>
+                <div className="bg-slate-900 p-6 rounded-xl border border-slate-800">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-slate-400 font-medium">Signals Broadcasted</h3>
+                    <Share2 className="w-5 h-5 text-purple-400" />
+                  </div>
+                  <div className="text-2xl font-bold text-white">{signals.length}</div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ACCESS CODES TAB */}
+          {activeTab === 'codes' && (
+            <div className="space-y-6">
+              <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-lg font-medium text-white mb-1">Generate Access Code</h3>
+                  <p className="text-sm text-slate-400">Create a new code for user registration.</p>
+                </div>
+                <div className="flex items-center gap-4">
+                  <select 
+                    value={codeDuration}
+                    onChange={(e) => setCodeDuration(e.target.value)}
+                    className="bg-slate-800 border border-slate-700 text-white rounded-lg px-4 py-2 focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value="1">1 Day</option>
+                    <option value="7">7 Days</option>
+                    <option value="30">30 Days</option>
+                    <option value="lifetime">Lifetime</option>
+                  </select>
+                  <button onClick={generateCode} className="bg-indigo-500 hover:bg-indigo-600 text-white px-6 py-2 rounded-lg font-medium transition-colors">
+                    Generate
+                  </button>
+                </div>
+              </div>
+
+              {newCode && (
+                <div className="bg-emerald-500/10 border border-emerald-500/20 p-6 rounded-xl flex items-center justify-between">
+                  <div>
+                    <p className="text-emerald-400 font-medium mb-1">New Code Generated!</p>
+                    <p className="text-sm text-slate-400">Copy this and send it to your customer.</p>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <span className="font-mono text-white bg-slate-900 px-6 py-3 rounded-lg text-2xl tracking-widest border border-slate-700">{newCode}</span>
+                    <button 
+                      onClick={() => { navigator.clipboard.writeText(newCode); alert('Copied!'); }}
+                      className="text-indigo-400 hover:text-indigo-300 font-medium"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-slate-800 text-slate-400">
+                    <tr>
+                      <th className="p-4">Code</th>
+                      <th className="p-4">Duration</th>
+                      <th className="p-4">Status</th>
+                      <th className="p-4">Used By</th>
+                      <th className="p-4">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800">
+                    {codes.map((c: any) => (
+                      <tr key={c.id} className="hover:bg-slate-800/50">
+                        <td className="p-4 font-mono text-white tracking-wider">{c.code}</td>
+                        <td className="p-4 text-slate-400">{c.durationDays === 9999 ? 'Lifetime' : `${c.durationDays} Days`}</td>
+                        <td className="p-4">
+                          <span className={`px-2 py-1 rounded text-xs ${c.isUsed ? 'bg-slate-700 text-slate-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
+                            {c.isUsed ? 'Used' : 'Available'}
+                          </span>
+                        </td>
+                        <td className="p-4 text-slate-400">{c.usedByUsername || '-'}</td>
+                        <td className="p-4">
+                          <button onClick={() => revokeCode(c.id)} className="text-rose-400 hover:text-rose-300 p-2 rounded hover:bg-rose-500/10 transition-colors" title="Revoke & Delete">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* USERS TAB */}
+          {activeTab === 'users' && (
+            <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-800 text-slate-400">
+                  <tr>
+                    <th className="p-4">User</th>
+                    <th className="p-4">Pocket Option</th>
+                    <th className="p-4">Settings (TP / SL)</th>
+                    <th className="p-4">Status</th>
+                    <th className="p-4">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800">
+                  {users.map((u: any) => (
+                    <tr key={u.id} className={`hover:bg-slate-800/50 ${u.isBanned ? 'opacity-50' : ''}`}>
+                      <td className="p-4">
+                        <div className="font-medium text-white flex items-center gap-2">
+                          {u.email || u.username}
+                          {u.level === 'Premium Member' && <Crown className="w-4 h-4 text-amber-400" />}
+                        </div>
+                        <div className="text-xs text-slate-500 font-mono mt-1">{u.id}</div>
+                      </td>
+                      <td className="p-4">
+                        {u.pocketOptionId ? (
+                          <span className="text-emerald-400 font-mono text-xs bg-emerald-500/10 px-2 py-1 rounded border border-emerald-500/20">Linked: {u.pocketOptionId}</span>
+                        ) : (
+                          <span className="text-slate-500 text-xs">Not Linked</span>
+                        )}
+                      </td>
+                      <td className="p-4 text-slate-400 font-mono text-xs">
+                        {u.tradeSettings ? (
+                          <>+${u.tradeSettings.takeProfit} / -${u.tradeSettings.stopLoss}</>
+                        ) : 'Not Set'}
+                      </td>
+                      <td className="p-4">
+                        {u.isBanned ? (
+                          <span className="text-rose-400 text-xs font-bold uppercase">Banned</span>
+                        ) : u.is_live_synced ? (
+                          <span className="text-blue-400 text-xs font-bold uppercase flex items-center gap-1"><Activity className="w-3 h-3"/> Trading</span>
+                        ) : (
+                          <span className="text-slate-500 text-xs font-bold uppercase">Idle</span>
+                        )}
+                      </td>
+                      <td className="p-4 flex items-center gap-2">
+                        <button
+                          onClick={() => toggleVIP(u.id, u.level)}
+                          className={`px-3 py-1 rounded text-xs font-bold transition-colors ${u.level === 'Premium Member' ? 'bg-amber-500/20 text-amber-400 hover:bg-amber-500/30' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+                        >
+                          VIP
+                        </button>
+                        <button
+                          onClick={() => toggleBan(u.id, u.isBanned)}
+                          className={`p-1.5 rounded transition-colors ${u.isBanned ? 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30' : 'bg-rose-500/20 text-rose-400 hover:bg-rose-500/30'}`}
+                          title={u.isBanned ? "Unban User" : "Ban User"}
+                        >
+                          <Ban className="w-4 h-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* SIGNAL BROADCASTER TAB */}
+          {activeTab === 'signals' && (
+            <div className="grid md:grid-cols-2 gap-6">
+              <div className="bg-slate-900 rounded-xl border border-slate-800 p-6">
+                <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                  <Share2 className="w-5 h-5 text-indigo-400" />
+                  Manual Signal Broadcaster
+                </h3>
+                <p className="text-slate-400 text-sm mb-6">
+                  Push a signal instantly to all active users. This will trigger auto-trading for users who have it enabled.
+                </p>
+                <form onSubmit={broadcastSignal} className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-400 mb-2">Asset</label>
+                    <select value={sigAsset} onChange={(e) => setSigAsset(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:outline-none focus:border-indigo-500">
+                      <option value="EUR/USD">EUR/USD</option>
+                      <option value="GBP/USD">GBP/USD</option>
+                      <option value="USD/JPY">USD/JPY</option>
+                      <option value="BTC/USD">BTC/USD</option>
+                      <option value="EUR/USD OTC">EUR/USD OTC</option>
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-400 mb-2">Timeframe</label>
+                      <select value={sigTimeframe} onChange={(e) => setSigTimeframe(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:outline-none focus:border-indigo-500">
+                        <option value="1m">1 Minute</option>
+                        <option value="5m">5 Minutes</option>
+                        <option value="15m">15 Minutes</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-400 mb-2">Direction</label>
+                      <select value={sigDirection} onChange={(e) => setSigDirection(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:outline-none focus:border-indigo-500">
+                        <option value="Buy">BUY (UP)</option>
+                        <option value="Sell">SELL (DOWN)</option>
+                      </select>
+                    </div>
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={sendingSignal}
+                    className="w-full bg-indigo-500 hover:bg-indigo-600 disabled:bg-slate-700 text-white px-6 py-4 rounded-lg font-bold transition-colors flex items-center justify-center gap-2 mt-4"
+                  >
+                    <Share2 className="w-5 h-5" />
+                    {sendingSignal ? 'Broadcasting...' : 'BROADCAST SIGNAL NOW'}
+                  </button>
+                </form>
+              </div>
+
+              <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden flex flex-col">
+                <div className="p-6 border-b border-slate-800">
+                  <h3 className="text-lg font-semibold text-white">Recent Signals</h3>
+                </div>
+                <div className="flex-1 overflow-auto p-0">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-slate-800 text-slate-400">
+                      <tr>
+                        <th className="p-4">Time</th>
+                        <th className="p-4">Asset</th>
+                        <th className="p-4">Signal</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800">
+                      {signals.map((s: any) => (
+                        <tr key={s.id} className="hover:bg-slate-800/50">
+                          <td className="p-4 text-slate-400 text-xs">{new Date(s.created_at).toLocaleTimeString()}</td>
+                          <td className="p-4 font-medium text-white">{s.asset} <span className="text-slate-500 text-xs ml-1">{s.timeframe}</span></td>
+                          <td className="p-4">
+                            <span className={`font-bold ${s.signal === 'Buy' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {s.signal}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* BOT ENGINE TAB */}
+          {activeTab === 'bot-engine' && (
+            <div className="space-y-6">
+              <div className="bg-slate-900 rounded-xl border border-slate-800 p-8 flex flex-col items-center justify-center text-center">
+                <div className={`w-24 h-24 rounded-full flex items-center justify-center mb-6 ${platformSettings.masterKillSwitch ? 'bg-rose-500/20 text-rose-500' : 'bg-emerald-500/20 text-emerald-500'}`}>
+                  <Power className="w-12 h-12" />
+                </div>
+                <h3 className="text-2xl font-bold text-white mb-2">Master Kill Switch</h3>
+                <p className="text-slate-400 max-w-md mb-8">
+                  {platformSettings.masterKillSwitch 
+                    ? "AUTO-TRADING IS CURRENTLY DISABLED FOR ALL USERS." 
+                    : "Auto-trading is active. Users can connect and trade."}
+                </p>
+                <button
+                  onClick={toggleMasterKillSwitch}
+                  className={`px-8 py-4 rounded-xl font-bold text-lg transition-all shadow-lg ${platformSettings.masterKillSwitch ? 'bg-emerald-500 hover:bg-emerald-600 text-white shadow-emerald-500/20' : 'bg-rose-500 hover:bg-rose-600 text-white shadow-rose-500/20'}`}
+                >
+                  {platformSettings.masterKillSwitch ? 'ENABLE AUTO-TRADING' : 'EMERGENCY STOP ALL TRADING'}
+                </button>
+              </div>
+
+              <div className="bg-slate-900 rounded-xl border border-slate-800 p-6">
+                <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                  <Activity className="w-5 h-5 text-slate-400" />
+                  Live Robot Logs (Puppeteer)
+                </h3>
+                <div className="bg-black rounded-lg p-4 font-mono text-xs text-emerald-400 h-64 overflow-y-auto border border-slate-800">
+                  <div className="opacity-50">[SYSTEM] Backend robot initialized.</div>
+                  <div className="opacity-50">[SYSTEM] Waiting for user connections...</div>
+                  {users.filter(u => u.is_live_synced).map(u => (
+                    <div key={u.id} className="mt-1">
+                      [INFO] Monitoring active session for user: {u.email || u.username}
+                    </div>
+                  ))}
+                  {platformSettings.masterKillSwitch && (
+                    <div className="text-rose-500 mt-2 font-bold">[ALERT] MASTER KILL SWITCH ENGAGED. ALL TRADING HALTED.</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* PLATFORM SETTINGS TAB */}
+          {activeTab === 'platform' && (
+            <div className="max-w-2xl bg-slate-900 rounded-xl border border-slate-800 p-6">
+              <h3 className="text-lg font-semibold text-white mb-2">Platform Customization</h3>
+              <p className="text-slate-400 text-sm mb-6">Update the support links shown in the floating widget for all users.</p>
+              
+              <form onSubmit={savePlatformSettings} className="space-y-6">
+                <div>
+                  <label className="block text-sm font-medium text-slate-400 mb-2">Telegram Group/Channel Link</label>
+                  <input
+                    type="url"
+                    value={platformSettings.telegram || ''}
+                    onChange={(e) => setPlatformSettings({...platformSettings, telegram: e.target.value})}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:outline-none focus:border-indigo-500"
+                    placeholder="https://t.me/..."
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-400 mb-2">Support Email Address</label>
+                  <input
+                    type="email"
+                    value={platformSettings.email?.replace('mailto:', '') || ''}
+                    onChange={(e) => setPlatformSettings({...platformSettings, email: `mailto:${e.target.value}`})}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:outline-none focus:border-indigo-500"
+                    placeholder="support@domain.com"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-400 mb-2">WhatsApp Channel Link</label>
+                  <input
+                    type="url"
+                    value={platformSettings.whatsapp || ''}
+                    onChange={(e) => setPlatformSettings({...platformSettings, whatsapp: e.target.value})}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:outline-none focus:border-indigo-500"
+                    placeholder="https://wa.me/..."
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-400 mb-2">WhatsApp Business (Admin VIP) Link</label>
+                  <input
+                    type="url"
+                    value={platformSettings.whatsappBusiness || ''}
+                    onChange={(e) => setPlatformSettings({...platformSettings, whatsappBusiness: e.target.value})}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:outline-none focus:border-indigo-500"
+                    placeholder="https://wa.me/..."
+                  />
+                </div>
+                
+                <button
+                  type="submit"
+                  className="bg-indigo-500 hover:bg-indigo-600 text-white px-6 py-3 rounded-lg font-medium transition-colors flex items-center gap-2"
+                >
+                  <CheckCircle2 className="w-5 h-5" />
+                  Save Platform Links
+                </button>
+              </form>
+            </div>
+          )}
+
+          {/* BROWSER TAB (Legacy Pocket Option View) */}
           {activeTab === 'browser' && (
             <div className="h-full w-full flex flex-col bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
               <div className="bg-slate-800 p-3 flex items-center justify-between border-b border-slate-700">
@@ -253,58 +652,8 @@ export default function AdminDashboard() {
                     <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
                     <span className="text-xs font-medium text-slate-300">Live Connection</span>
                   </div>
-                  <div className="hidden lg:flex items-center gap-2 bg-slate-700/50 px-2 py-1 rounded border border-slate-600">
-                    <span className="text-[10px] text-slate-500 font-bold uppercase">Agent:</span>
-                    <span className="text-[10px] text-emerald-400 font-mono">Mozilla/5.0 (Windows NT 10.0; Win64; x64)</span>
-                  </div>
-                  
-                  {/* Sync Controls */}
-                  <div className="flex items-center gap-2 ml-4 border-l border-slate-700 pl-4">
-                    <select 
-                      id="sync-asset"
-                      className="bg-slate-900 border border-slate-700 text-xs text-white rounded px-2 py-1 focus:outline-none focus:border-indigo-500"
-                    >
-                      <option value="EUR/USD">EUR/USD</option>
-                      <option value="GBP/USD">GBP/USD</option>
-                      <option value="USD/JPY">USD/JPY</option>
-                      <option value="BTC/USD">BTC/USD</option>
-                      <option value="EUR/USD OTC">EUR/USD OTC</option>
-                    </select>
-                    <select 
-                      id="sync-timeframe"
-                      className="bg-slate-900 border border-slate-700 text-xs text-white rounded px-2 py-1 focus:outline-none focus:border-indigo-500"
-                    >
-                      <option value="1m">1m</option>
-                      <option value="5m">5m</option>
-                      <option value="15m">15m</option>
-                    </select>
-                    <button 
-                      onClick={() => {
-                        const asset = (document.getElementById('sync-asset') as HTMLSelectElement).value;
-                        const timeframe = (document.getElementById('sync-timeframe') as HTMLSelectElement).value;
-                        const { io } = require('socket.io-client');
-                        const socket = io();
-                        socket.emit('sync_view', { asset, timeframe });
-                        alert(`Synced ${asset} to all users!`);
-                      }}
-                      className="bg-emerald-500 hover:bg-emerald-600 text-white text-[10px] font-bold px-3 py-1 rounded transition-all flex items-center gap-1"
-                    >
-                      <Share2 className="w-3 h-3" />
-                      PUSH TO USERS
-                    </button>
-                  </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button 
-                    onClick={() => {
-                      const frame = document.getElementById('po-frame') as HTMLIFrameElement;
-                      if (frame) frame.src = frame.src;
-                    }}
-                    className="p-1.5 hover:bg-slate-700 rounded-md text-slate-400 transition-colors"
-                    title="Refresh Browser"
-                  >
-                    <Activity className="w-4 h-4" />
-                  </button>
                   <a 
                     href="https://pocketoption.com/en/cabinet/demo-quick-high-low/" 
                     target="_blank" 
@@ -325,278 +674,10 @@ export default function AdminDashboard() {
                   allow="camera; microphone; clipboard-read; clipboard-write; display-capture; fullscreen"
                   sandbox="allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts allow-top-navigation-by-user-activation"
                 />
-                <div className="absolute inset-0 pointer-events-none border-4 border-indigo-500/10 rounded-xl"></div>
-              </div>
-              <div className="bg-slate-800 p-2 text-[10px] text-slate-500 text-center border-t border-slate-700">
-                Note: If the browser is blank, please use the "Open Full Browser" button. Some trading platforms restrict embedding for security.
               </div>
             </div>
           )}
 
-          {activeTab === 'users' && (
-            <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
-              <table className="w-full text-left text-sm">
-                <thead className="bg-slate-800 text-slate-400">
-                  <tr>
-                    <th className="p-4">Short ID</th>
-                    <th className="p-4">Email</th>
-                    <th className="p-4">Rank</th>
-                    <th className="p-4">Trades</th>
-                    <th className="p-4">Pocket Option ID</th>
-                    <th className="p-4">Joined</th>
-                    <th className="p-4">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800">
-                  {users.map((u: any) => (
-                    <tr key={u.id} className="hover:bg-slate-800/50">
-                      <td className="p-4 font-mono text-emerald-400">{u.shortId || u.id.substring(0, 6).toUpperCase()}</td>
-                      <td className="p-4 font-medium text-white">{u.email || u.username}</td>
-                      <td className="p-4">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                          u.level === 'Elite Legend' ? 'bg-amber-500 text-black' :
-                          u.level === 'Premium Member' ? 'bg-indigo-500 text-white' :
-                          u.level === 'Trade Master' ? 'bg-emerald-500 text-white' :
-                          'bg-slate-700 text-slate-300'
-                        }`}>
-                          {u.level || 'Rookie'}
-                        </span>
-                      </td>
-                      <td className="p-4 font-mono text-white">{u.trade_count || 0}</td>
-                      <td className="p-4 font-mono text-emerald-400">{u.pocketOptionId || 'Not Linked'}</td>
-                      <td className="p-4 text-slate-400">{u.createdAt?.toDate ? u.createdAt.toDate().toLocaleString() : 'N/A'}</td>
-                      <td className="p-4">
-                        <button
-                          onClick={() => generateCodeForUser(u.shortId || u.id.substring(0, 6).toUpperCase())}
-                          className="bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500 hover:text-white px-3 py-1 rounded transition-colors text-sm"
-                        >
-                          Generate Code
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {activeTab === 'signals' && (
-            <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
-              <table className="w-full text-left text-sm">
-                <thead className="bg-slate-800 text-slate-400">
-                  <tr>
-                    <th className="p-4">Time</th>
-                    <th className="p-4">User</th>
-                    <th className="p-4">Source</th>
-                    <th className="p-4">Asset</th>
-                    <th className="p-4">Timeframe</th>
-                    <th className="p-4">Signal</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800">
-                  {signals.map((s: any) => (
-                    <tr key={s.id} className="hover:bg-slate-800/50">
-                      <td className="p-4 text-slate-400">{new Date(s.created_at).toLocaleString()}</td>
-                      <td className="p-4 font-medium text-white">{s.username}</td>
-                      <td className="p-4">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${s.source === 'Manual' ? 'bg-slate-700 text-slate-400' : 'bg-indigo-500/20 text-indigo-400'}`}>
-                          {s.source || 'Manual'}
-                        </span>
-                      </td>
-                      <td className="p-4">{s.asset}</td>
-                      <td className="p-4">{s.timeframe}</td>
-                      <td className="p-4">
-                        <span className={`font-bold ${s.signal === 'Buy' ? 'text-emerald-400' : 'text-rose-400'}`}>
-                          {s.signal}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {activeTab === 'codes' && (
-            <div className="space-y-6">
-              <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 flex items-center justify-between">
-                <div>
-                  <h3 className="text-lg font-medium text-white mb-1">Generate Access Code</h3>
-                  <p className="text-sm text-slate-400">Create a new single-use code for user registration.</p>
-                </div>
-                <div className="flex items-center gap-4">
-                  {newCode && <span className="font-mono text-indigo-400 bg-indigo-500/10 px-4 py-2 rounded-lg text-lg tracking-widest">{newCode}</span>}
-                  <button onClick={generateCode} className="bg-indigo-500 hover:bg-indigo-600 text-white px-6 py-2 rounded-lg font-medium transition-colors">
-                    Generate
-                  </button>
-                </div>
-              </div>
-
-              <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
-                <table className="w-full text-left text-sm">
-                  <thead className="bg-slate-800 text-slate-400">
-                    <tr>
-                      <th className="p-4">Code</th>
-                      <th className="p-4">Status</th>
-                      <th className="p-4">Used By</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800">
-                    {codes.map((c: any) => (
-                      <tr key={c.id} className="hover:bg-slate-800/50">
-                        <td className="p-4 font-mono text-white tracking-wider">{c.code}</td>
-                        <td className="p-4">
-                          <span className={`px-2 py-1 rounded text-xs ${c.isUsed ? 'bg-slate-700 text-slate-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
-                            {c.isUsed ? 'Used' : 'Available'}
-                          </span>
-                        </td>
-                        <td className="p-4 text-slate-400">{c.usedByUsername || '-'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'broadcast' && (
-            <div className="max-w-2xl bg-slate-900 rounded-xl border border-slate-800 p-6">
-              <h3 className="text-lg font-semibold text-white mb-4">Send Broadcast Message</h3>
-              <p className="text-slate-400 text-sm mb-6">
-                Send a real-time notification to all connected users. Offline users will see this message the next time they log in.
-              </p>
-              <form onSubmit={handleBroadcast} className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-400 mb-2">Message Content</label>
-                  <textarea
-                    value={broadcastMessage}
-                    onChange={(e) => setBroadcastMessage(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-lg p-4 text-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors min-h-[120px]"
-                    placeholder="e.g., Market alert: BTC/USD signal updated. Check your dashboard."
-                    required
-                  />
-                </div>
-                <button
-                  type="submit"
-                  disabled={sendingBroadcast}
-                  className="bg-indigo-500 hover:bg-indigo-600 disabled:bg-slate-700 disabled:cursor-not-allowed text-white px-6 py-3 rounded-lg font-medium transition-colors flex items-center gap-2"
-                >
-                  <MessageSquare className="w-5 h-5" />
-                  {sendingBroadcast ? 'Sending...' : 'Send Broadcast'}
-                </button>
-              </form>
-            </div>
-          )}
-
-          {activeTab === 'webhooks' && (
-            <div className="space-y-8 max-w-4xl">
-              <div className="bg-slate-900 p-6 rounded-xl border border-slate-800">
-                <h3 className="text-xl font-semibold text-white mb-4">Webhook Configuration</h3>
-                <p className="text-slate-400 mb-6">Use these details to connect TradingView, MT4, or MT5 to your signal bot.</p>
-                
-                <div className="space-y-4">
-                  <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Webhook URL</label>
-                    <div className="flex items-center justify-between">
-                      <code className="text-emerald-400 font-mono text-sm">{window.location.origin}/api/webhooks/[SOURCE]</code>
-                      <button 
-                        onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/api/webhooks/tradingview`); alert('URL copied!'); }}
-                        className="text-indigo-400 hover:text-indigo-300 text-xs font-medium"
-                      >
-                        Copy
-                      </button>
-                    </div>
-                    <p className="text-[10px] text-slate-500 mt-2 italic">Replace [SOURCE] with tradingview, mt4, or mt5.</p>
-                  </div>
-
-                  <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Webhook Secret</label>
-                    <div className="flex items-center justify-between">
-                      <code className="text-emerald-400 font-mono text-sm">{webhookSecret}</code>
-                      <button 
-                        onClick={() => { navigator.clipboard.writeText(webhookSecret); alert('Secret copied!'); }}
-                        className="text-indigo-400 hover:text-indigo-300 text-xs font-medium"
-                      >
-                        Copy
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid md:grid-cols-2 gap-6">
-                <div className="bg-slate-900 p-6 rounded-xl border border-slate-800">
-                  <h4 className="text-white font-medium mb-4 flex items-center gap-2">
-                    <img src="https://www.tradingview.com/static/images/favicon.ico" className="w-4 h-4" alt="" />
-                    TradingView Setup
-                  </h4>
-                  <ol className="text-sm text-slate-400 space-y-3 list-decimal ml-4">
-                    <li>Create an Alert on any chart.</li>
-                    <li>Set the <strong>Webhook URL</strong> to the one above.</li>
-                    <li>In the <strong>Message</strong> box, paste this JSON:</li>
-                  </ol>
-                  <pre className="mt-4 bg-slate-950 p-3 rounded text-[10px] text-emerald-500 font-mono overflow-x-auto">
-{`{
-  "secret": "${webhookSecret}",
-  "asset": "{{ticker}}",
-  "signal": "{{strategy.order.action}}",
-  "timeframe": "{{interval}}",
-  "price": "{{close}}"
-}`}
-                  </pre>
-                </div>
-
-                <div className="bg-slate-900 p-6 rounded-xl border border-slate-800">
-                  <h4 className="text-white font-medium mb-4 flex items-center gap-2">
-                    MT4 / MT5 Setup
-                  </h4>
-                  <p className="text-sm text-slate-400 mb-4">
-                    Use an "Expert Advisor" (EA) or a script that can send HTTP POST requests.
-                  </p>
-                  <p className="text-xs text-slate-500 mb-4">
-                    Send a POST request to: <br/>
-                    <code className="text-indigo-400">{window.location.origin}/api/webhooks/mt4</code>
-                  </p>
-                  <p className="text-sm text-slate-400">
-                    Payload must include the <code>secret</code>, <code>asset</code>, and <code>signal</code> (Buy/Sell).
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'settings' && (
-            <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 max-w-2xl">
-              <h3 className="text-lg font-medium text-white mb-6">System Settings</h3>
-              <div className="space-y-6">
-                {settings.map((s: any) => (
-                  <div key={s.key} className="space-y-2">
-                    <label className="block text-sm font-medium text-slate-400 capitalize">
-                      {s.key.replace(/_/g, ' ')}
-                    </label>
-                    <div className="flex gap-2">
-                      <input
-                        type={s.key.includes('key') ? 'password' : 'text'}
-                        defaultValue={s.value}
-                        id={`setting-${s.key}`}
-                        className="flex-1 bg-slate-800 border border-slate-700 rounded-lg py-2 px-4 focus:outline-none focus:border-indigo-500 transition-colors text-white"
-                        placeholder={s.key.includes('key') ? 'Enter API Key' : ''}
-                      />
-                      <button
-                        onClick={() => {
-                          const input = document.getElementById(`setting-${s.key}`) as HTMLInputElement;
-                          updateSetting(s.key, input.value);
-                        }}
-                        className="bg-indigo-500 hover:bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-                      >
-                        Save
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       </main>
     </div>

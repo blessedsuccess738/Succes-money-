@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Activity, Clock, LogOut, TrendingUp, ExternalLink, ChevronDown } from 'lucide-react';
+import { Activity, Clock, LogOut, TrendingUp, ExternalLink, ChevronDown, ShieldCheck, Wallet, RefreshCcw, Power, Settings } from 'lucide-react';
 import { auth, db, handleFirestoreError, OperationType } from '../../firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { doc, getDoc, collection, query, where, getDocs, addDoc, serverTimestamp, onSnapshot, orderBy, limit } from 'firebase/firestore';
 import TradeView from '../../components/TradeView';
 import Notifications from '../../components/Notifications';
+import PocketOptionOnboarding from '../../components/PocketOptionOnboarding';
+import AutoTradeSettings from '../../components/AutoTradeSettings';
 import { io } from 'socket.io-client';
 
 const socket = io();
@@ -37,6 +39,7 @@ export default function UserDashboard() {
   const [user, setUser] = useState<{ username: string } | null>(null);
   const [showAssetDropdown, setShowAssetDropdown] = useState(false);
   const [showTimeframeDropdown, setShowTimeframeDropdown] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -60,13 +63,18 @@ export default function UserDashboard() {
               return;
             }
 
-            // Check pocket option id
-            if (!userData.pocketOptionId) {
-              navigate('/verify-code');
-              return;
-            }
-
+            // We no longer redirect if pocketOptionId is missing, we show the onboarding modal.
             setUser({ ...userData, uid: firebaseUser.uid } as any);
+
+            // Fetch additional bot profile data from SQLite backend
+            const token = await firebaseUser.getIdToken();
+            const profileRes = await fetch('/api/user/profile', {
+              headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (profileRes.ok) {
+              const profileData = await profileRes.json();
+              setUser(prev => prev ? { ...prev, ...profileData } : null);
+            }
           } else {
             navigate('/login');
           }
@@ -94,6 +102,14 @@ export default function UserDashboard() {
       setUser((prev: any) => prev ? { ...prev, trade_count: data.trade_count, level: data.level } : null);
     });
 
+    socket.on('balance_update', (data: { balance: number }) => {
+      setUser((prev: any) => prev ? { ...prev, balance: data.balance } : null);
+    });
+
+    socket.on('sync_status', (data: { is_live_synced: boolean, balance?: number, status: string }) => {
+      setUser((prev: any) => prev ? { ...prev, is_live_synced: data.is_live_synced, balance: data.balance ?? prev.balance } : null);
+    });
+
     return () => {
       unsubscribeAuth();
       socket.off('new_signal');
@@ -104,6 +120,22 @@ export default function UserDashboard() {
   const handleLogout = async () => {
     await signOut(auth);
     navigate('/login');
+  };
+
+  const toggleSync = async () => {
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const endpoint = user.is_live_synced ? '/api/sync/stop' : '/api/sync/start';
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (!response.ok) throw new Error('Sync toggle failed');
+    } catch (err) {
+      console.error('Sync error:', err);
+    }
   };
 
   const getSignal = async () => {
@@ -141,6 +173,23 @@ export default function UserDashboard() {
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-200">
+      {!user.pocketOptionId && (
+        <PocketOptionOnboarding 
+          user={user} 
+          onComplete={(pocketId) => {
+            setUser(prev => prev ? { ...prev, pocketOptionId: pocketId } : null);
+          }} 
+        />
+      )}
+      {showSettings && (
+        <AutoTradeSettings 
+          user={user}
+          onClose={() => setShowSettings(false)}
+          onSave={(settings) => {
+            setUser(prev => prev ? { ...prev, tradeSettings: settings } : null);
+          }}
+        />
+      )}
       <header className="bg-slate-800 border-b border-slate-700 p-4 flex justify-between items-center">
         <div className="flex items-center gap-2">
           <Activity className="text-emerald-400 w-6 h-6" />
@@ -187,49 +236,91 @@ export default function UserDashboard() {
 
         <div className="grid lg:grid-cols-3 gap-8">
           <div className="lg:col-span-2 space-y-8">
-              <div className="bg-slate-800 p-6 rounded-2xl shadow-lg border border-slate-700">
-                <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
-                  <TrendingUp className="w-5 h-5 text-emerald-400" />
-                  Reputation Level
-                </h3>
-                <div className="space-y-4">
-                  <div className="flex justify-between items-end">
-                    <div>
-                      <p className="text-2xl font-bold text-white">{user.level || 'Rookie'}</p>
-                      <p className="text-xs text-slate-500 uppercase tracking-widest font-bold">Current Rank</p>
+              <div className="grid md:grid-cols-2 gap-6">
+                {/* Reputation Card */}
+                <div className="bg-slate-800 p-6 rounded-2xl shadow-lg border border-slate-700">
+                  <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                    <TrendingUp className="w-5 h-5 text-emerald-400" />
+                    Reputation Level
+                  </h3>
+                  <div className="space-y-4">
+                    <div className="flex justify-between items-end">
+                      <div>
+                        <p className="text-2xl font-bold text-white">{user.level || 'Rookie'}</p>
+                        <p className="text-xs text-slate-500 uppercase tracking-widest font-bold">Current Rank</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-xl font-mono text-emerald-400 font-bold">{user.trade_count || 0}</p>
+                        <p className="text-xs text-slate-500 uppercase tracking-widest font-bold">Total Trades</p>
+                      </div>
                     </div>
-                    <div className="text-right">
-                      <p className="text-xl font-mono text-emerald-400 font-bold">{user.trade_count || 0}</p>
-                      <p className="text-xs text-slate-500 uppercase tracking-widest font-bold">Total Trades</p>
+                    
+                    <div className="space-y-2">
+                      <div className="flex justify-between text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                        <span>Progress to Next Rank</span>
+                        <span>{Math.min(100, Math.floor(((user.trade_count || 0) / 500) * 100))}%</span>
+                      </div>
+                      <div className="w-full bg-slate-700 h-2 rounded-full overflow-hidden">
+                        <div 
+                          className="bg-gradient-to-r from-emerald-500 to-teal-500 h-full transition-all duration-1000"
+                          style={{ width: `${Math.min(100, Math.floor(((user.trade_count || 0) / 500) * 100))}%` }}
+                        ></div>
+                      </div>
                     </div>
                   </div>
+                </div>
+
+                {/* Live Sync Card */}
+                <div className="bg-slate-800 p-6 rounded-2xl shadow-lg border border-slate-700 relative overflow-hidden">
+                  <div className={`absolute top-0 right-0 w-24 h-24 -mr-8 -mt-8 rounded-full blur-3xl transition-colors duration-1000 ${user.is_live_synced ? 'bg-emerald-500/20' : 'bg-rose-500/10'}`}></div>
                   
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                      <span>Progress to Next Rank</span>
-                      <span>{Math.min(100, Math.floor(((user.trade_count || 0) / 500) * 100))}%</span>
-                    </div>
-                    <div className="w-full bg-slate-700 h-2 rounded-full overflow-hidden">
-                      <div 
-                        className="bg-gradient-to-r from-emerald-500 to-teal-500 h-full transition-all duration-1000"
-                        style={{ width: `${Math.min(100, Math.floor(((user.trade_count || 0) / 500) * 100))}%` }}
-                      ></div>
+                  <div className="flex justify-between items-start mb-4">
+                    <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                      <ShieldCheck className={`w-5 h-5 ${user.is_live_synced ? 'text-emerald-400' : 'text-slate-500'}`} />
+                      Live Account
+                    </h3>
+                    <div className="flex items-center gap-2">
+                      <button 
+                        onClick={() => setShowSettings(true)}
+                        className="p-2 rounded-lg transition-all bg-slate-700/50 text-slate-400 hover:text-white hover:bg-slate-700"
+                        title="Auto-Trade Settings"
+                      >
+                        <Settings className="w-4 h-4" />
+                      </button>
+                      <button 
+                        onClick={toggleSync}
+                        className={`p-2 rounded-lg transition-all ${user.is_live_synced ? 'bg-rose-500/20 text-rose-400 hover:bg-rose-500/30' : 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30'}`}
+                        title={user.is_live_synced ? "Stop Auto-Trading" : "Start Auto-Trading"}
+                      >
+                        <Power className="w-4 h-4" />
+                      </button>
                     </div>
                   </div>
-                  
-                  <div className="grid grid-cols-3 gap-2 pt-2">
-                    <div className={`p-2 rounded-lg border text-center ${user.trade_count >= 150 ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-slate-800/50 border-slate-700 opacity-40'}`}>
-                      <p className="text-[10px] font-bold text-white">MASTER</p>
-                      <p className="text-[8px] text-slate-500">150 Trades</p>
+
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 bg-slate-700 rounded-xl flex items-center justify-center">
+                        <Wallet className={`w-6 h-6 ${user.is_live_synced ? 'text-emerald-400' : 'text-slate-500'}`} />
+                      </div>
+                      <div>
+                        <p className="text-2xl font-bold text-white font-mono">
+                          {user.is_live_synced ? `$${(user.balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '----.--'}
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <div className={`w-1.5 h-1.5 rounded-full ${user.is_live_synced ? 'bg-emerald-500 animate-pulse' : 'bg-slate-600'}`}></div>
+                          <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">
+                            {user.is_live_synced ? 'Live Connection Active' : 'Disconnected'}
+                          </p>
+                        </div>
+                      </div>
                     </div>
-                    <div className={`p-2 rounded-lg border text-center ${user.trade_count >= 300 ? 'bg-indigo-500/10 border-indigo-500/20' : 'bg-slate-800/50 border-slate-700 opacity-40'}`}>
-                      <p className="text-[10px] font-bold text-white">PREMIUM</p>
-                      <p className="text-[8px] text-slate-500">300 Trades</p>
-                    </div>
-                    <div className={`p-2 rounded-lg border text-center ${user.trade_count >= 500 ? 'bg-amber-500/10 border-amber-500/20' : 'bg-slate-800/50 border-slate-700 opacity-40'}`}>
-                      <p className="text-[10px] font-bold text-white">LEGEND</p>
-                      <p className="text-[8px] text-slate-500">500 Trades</p>
-                    </div>
+
+                    {user.is_live_synced && (
+                      <div className="bg-slate-900/50 rounded-lg p-3 border border-slate-700/50 flex items-center justify-between">
+                        <span className="text-[10px] text-slate-500 font-bold uppercase">Syncing with Cabinet</span>
+                        <RefreshCcw className="w-3 h-3 text-emerald-500 animate-spin" />
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>

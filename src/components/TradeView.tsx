@@ -20,12 +20,14 @@ export default function TradeView({ asset, timeframe, signal }: TradeViewProps) 
   const container = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const script = document.createElement('script');
-    script.src = 'https://s3.tradingview.com/tv.js';
-    script.async = true;
-    script.onload = () => {
-      if (container.current) {
-        new window.TradingView.widget({
+    let tvWidget: any = null;
+    
+    const initWidget = () => {
+      if (container.current && window.TradingView) {
+        // Clear previous widget
+        container.current.innerHTML = '';
+        
+        tvWidget = new window.TradingView.widget({
           autosize: true,
           symbol: asset.replace(' OTC', '').replace('/', ''),
           interval: timeframe.includes('s') ? '1' : timeframe.replace('m', ''),
@@ -43,11 +45,25 @@ export default function TradeView({ asset, timeframe, signal }: TradeViewProps) 
         });
       }
     };
-    document.head.appendChild(script);
+
+    if (!document.getElementById('tradingview-script')) {
+      const script = document.createElement('script');
+      script.id = 'tradingview-script';
+      script.src = 'https://s3.tradingview.com/tv.js';
+      script.async = true;
+      script.onload = initWidget;
+      document.head.appendChild(script);
+    } else {
+      initWidget();
+    }
 
     return () => {
-      if (script.parentNode) {
-        document.head.removeChild(script);
+      if (tvWidget) {
+        try {
+          tvWidget.remove();
+        } catch (e) {
+          // Ignore
+        }
       }
     };
   }, [asset, timeframe]);
@@ -112,26 +128,6 @@ export default function TradeView({ asset, timeframe, signal }: TradeViewProps) 
             </div>
           </div>
 
-          {/* Signal Overlay */}
-          {signal && countdown !== null && (
-            <div className="flex-1 flex justify-center">
-              <div className={`px-8 py-4 rounded-2xl border-2 flex items-center gap-4 shadow-2xl animate-in fade-in zoom-in duration-300 ${
-                signal.signal === 'Buy' 
-                  ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400 shadow-emerald-500/20' 
-                  : 'bg-rose-500/20 border-rose-500 text-rose-400 shadow-rose-500/20'
-              }`}>
-                {signal.signal === 'Buy' ? <TrendingUp className="w-8 h-8" /> : <TrendingDown className="w-8 h-8" />}
-                <div>
-                  <div className="text-2xl font-black uppercase tracking-widest">{signal.signal}</div>
-                  <div className="text-sm font-medium opacity-80 flex items-center gap-1 mt-1">
-                    <Clock className="w-4 h-4" />
-                    {countdown}s remaining
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
           {/* Timeframe Info */}
           <div className="text-right hidden md:block">
             <div className="text-sm text-slate-400 font-medium uppercase tracking-wider mb-1">Timeframe</div>
@@ -142,9 +138,34 @@ export default function TradeView({ asset, timeframe, signal }: TradeViewProps) 
         </div>
       </div>
 
-      {/* TradingView Widget */}
-      <div className="bg-slate-800 rounded-2xl shadow-xl border border-slate-700 overflow-hidden h-[500px]">
+      {/* TradingView Widget with Overlay */}
+      <div className="bg-slate-800 rounded-2xl shadow-xl border border-slate-700 overflow-hidden h-[500px] relative">
         <div id="tradingview_widget" ref={container} className="w-full h-full" />
+        
+        {/* On-Chart Signal Overlay (HUD) */}
+        {signal && countdown !== null && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center pointer-events-none bg-slate-900/40 backdrop-blur-sm">
+            <div className={`px-12 py-8 rounded-3xl border-4 flex flex-col items-center gap-4 shadow-[0_0_100px_rgba(0,0,0,0.5)] animate-in zoom-in duration-500 ${
+              signal.signal === 'Buy' 
+                ? 'bg-emerald-900/90 border-emerald-400 text-emerald-400 shadow-emerald-500/50' 
+                : 'bg-rose-900/90 border-rose-400 text-rose-400 shadow-rose-500/50'
+            }`}>
+              <div className="text-white font-bold text-xl tracking-widest opacity-80">{signal.asset}</div>
+              
+              <div className="flex items-center gap-6">
+                {signal.signal === 'Buy' ? <TrendingUp className="w-20 h-20" /> : <TrendingDown className="w-20 h-20" />}
+                <div className="text-7xl font-black uppercase tracking-tighter drop-shadow-2xl">
+                  {signal.signal}
+                </div>
+              </div>
+
+              <div className="mt-4 text-xl font-bold text-white bg-black/30 px-6 py-2 rounded-full flex items-center gap-2 border border-white/10">
+                <Clock className="w-5 h-5 text-emerald-400" />
+                Expires in {countdown}s
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

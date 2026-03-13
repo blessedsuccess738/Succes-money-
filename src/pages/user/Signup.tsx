@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { Lock, User } from 'lucide-react';
+import { Lock, User, Mail } from 'lucide-react';
 import { auth, db } from '../../firebase';
 import { createUserWithEmailAndPassword, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 import { doc, setDoc, getDoc, collection, query, where, getDocs, serverTimestamp } from 'firebase/firestore';
+import FloatingSupport from '../../components/FloatingSupport';
 
 export default function UserSignup() {
   const [username, setUsername] = useState('');
@@ -63,7 +64,7 @@ export default function UserSignup() {
         const codeSnap = await getDocs(q);
         const hasAccessCode = !codeSnap.empty;
 
-        if (userData?.pocketOptionId && hasAccessCode) {
+        if (hasAccessCode) {
           navigate('/dashboard');
         } else {
           navigate('/verify-code');
@@ -126,7 +127,7 @@ export default function UserSignup() {
         const codeSnap = await getDocs(q);
         const hasAccessCode = !codeSnap.empty;
 
-        if (userData.pocketOptionId && hasAccessCode) {
+        if (hasAccessCode) {
           navigate('/dashboard');
         } else {
           navigate('/verify-code');
@@ -141,20 +142,27 @@ export default function UserSignup() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-900 text-white">
-      <div className="bg-slate-800 p-8 rounded-2xl shadow-xl w-full max-w-md">
-        <h2 className="text-3xl font-bold mb-6 text-center text-emerald-400">Create Account</h2>
-        {error && <div className="bg-red-500/20 text-red-400 p-3 rounded-lg mb-4 text-sm text-center">{error}</div>}
+    <div className="min-h-screen flex items-center justify-center bg-slate-900 text-white relative overflow-hidden">
+      {/* Background Effects */}
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-emerald-500/10 blur-[120px] rounded-full pointer-events-none"></div>
+
+      <div className="bg-slate-800 p-8 rounded-2xl shadow-xl w-full max-w-md relative z-10 border border-slate-700/50">
+        <h2 className="text-3xl font-bold mb-2 text-center text-white">Create Account</h2>
+        <p className="text-center text-slate-400 mb-8">Join the elite trading community</p>
+        
+        {error && <div className="bg-rose-500/20 text-rose-400 p-3 rounded-lg mb-4 text-sm text-center border border-rose-500/20">{error}</div>}
+        
         <form onSubmit={handleSignup} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-slate-400 mb-1">Username or Email</label>
+            <label className="block text-sm font-medium text-slate-400 mb-1">Email Address</label>
             <div className="relative">
-              <User className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" />
+              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" />
               <input
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                className="w-full bg-slate-700 border border-slate-600 rounded-lg py-2 pl-10 pr-4 focus:outline-none focus:border-emerald-500 transition-colors"
+                placeholder="Enter your email"
+                className="w-full bg-slate-900/50 border border-slate-600 rounded-xl py-3 pl-10 pr-4 focus:outline-none focus:border-emerald-500 transition-colors text-white placeholder:text-slate-600"
                 required
               />
             </div>
@@ -167,7 +175,8 @@ export default function UserSignup() {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-slate-700 border border-slate-600 rounded-lg py-2 pl-10 pr-4 focus:outline-none focus:border-emerald-500 transition-colors"
+                placeholder="Create a password"
+                className="w-full bg-slate-900/50 border border-slate-600 rounded-xl py-3 pl-10 pr-4 focus:outline-none focus:border-emerald-500 transition-colors text-white placeholder:text-slate-600"
                 required
               />
             </div>
@@ -175,22 +184,23 @@ export default function UserSignup() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-600 text-white font-medium py-2 rounded-lg transition-colors"
+            className="w-full bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-600 text-white font-bold py-3 rounded-xl transition-all shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2"
           >
-            {loading ? 'Creating Account...' : 'Sign Up'}
+            <Mail className="w-5 h-5" />
+            {loading ? 'Creating Account...' : 'Sign Up with Email'}
           </button>
         </form>
 
-        <div className="mt-6 flex items-center justify-between">
+        <div className="mt-8 flex items-center justify-between">
           <span className="border-b border-slate-700 w-1/5 lg:w-1/4"></span>
-          <span className="text-xs text-center text-slate-500 uppercase">Or continue with</span>
+          <span className="text-xs text-center text-slate-500 uppercase font-bold tracking-wider">Or continue with</span>
           <span className="border-b border-slate-700 w-1/5 lg:w-1/4"></span>
         </div>
 
         <button
           onClick={handleGoogleAuth}
           disabled={loading}
-          className="mt-4 w-full bg-white/5 hover:bg-white/10 active:scale-95 active:bg-white/20 backdrop-blur-md text-white font-medium py-2.5 rounded-xl border border-white/10 shadow-lg transition-all duration-200 flex items-center justify-center disabled:opacity-50"
+          className="mt-6 w-full bg-white text-slate-900 hover:bg-slate-100 active:scale-95 font-bold py-3 rounded-xl shadow-lg transition-all duration-200 flex items-center justify-center disabled:opacity-50"
         >
           <svg className="w-5 h-5 mr-3" viewBox="0 0 24 24">
             <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
@@ -201,10 +211,11 @@ export default function UserSignup() {
           Continue with Google
         </button>
 
-        <p className="mt-6 text-center text-sm text-slate-400">
-          Already have an account? <Link to="/login" className="text-emerald-400 hover:underline">Log in</Link>
+        <p className="mt-8 text-center text-sm text-slate-400">
+          Already have an account? <Link to="/login" className="text-emerald-400 hover:text-emerald-300 font-bold hover:underline">Log in</Link>
         </p>
       </div>
+      <FloatingSupport />
     </div>
   );
 }
