@@ -52,7 +52,7 @@ export default function AdminDashboard() {
     let unsubscribeCodes: () => void;
 
     const setupSubscriptions = async () => {
-      if (activeTab === 'users') {
+      if (activeTab === 'users' || activeTab === 'browser') {
         const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
         unsubscribeUsers = onSnapshot(q, (snapshot) => {
           setUsers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
@@ -246,12 +246,90 @@ export default function AdminDashboard() {
         
         <div className="flex-1 overflow-auto p-6">
           {activeTab === 'browser' && (
-            <div className="h-full w-full bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
-              <iframe 
-                src="https://pocketoption.com/en/cabinet/demo-quick-high-low/" 
-                className="w-full h-full border-0"
-                title="Pocket Option"
-              />
+            <div className="h-full w-full flex flex-col bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
+              <div className="bg-slate-800 p-3 flex items-center justify-between border-b border-slate-700">
+                <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-2 bg-slate-700 px-3 py-1 rounded-md">
+                    <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
+                    <span className="text-xs font-medium text-slate-300">Live Connection</span>
+                  </div>
+                  <div className="hidden lg:flex items-center gap-2 bg-slate-700/50 px-2 py-1 rounded border border-slate-600">
+                    <span className="text-[10px] text-slate-500 font-bold uppercase">Agent:</span>
+                    <span className="text-[10px] text-emerald-400 font-mono">Mozilla/5.0 (Windows NT 10.0; Win64; x64)</span>
+                  </div>
+                  
+                  {/* Sync Controls */}
+                  <div className="flex items-center gap-2 ml-4 border-l border-slate-700 pl-4">
+                    <select 
+                      id="sync-asset"
+                      className="bg-slate-900 border border-slate-700 text-xs text-white rounded px-2 py-1 focus:outline-none focus:border-indigo-500"
+                    >
+                      <option value="EUR/USD">EUR/USD</option>
+                      <option value="GBP/USD">GBP/USD</option>
+                      <option value="USD/JPY">USD/JPY</option>
+                      <option value="BTC/USD">BTC/USD</option>
+                      <option value="EUR/USD OTC">EUR/USD OTC</option>
+                    </select>
+                    <select 
+                      id="sync-timeframe"
+                      className="bg-slate-900 border border-slate-700 text-xs text-white rounded px-2 py-1 focus:outline-none focus:border-indigo-500"
+                    >
+                      <option value="1m">1m</option>
+                      <option value="5m">5m</option>
+                      <option value="15m">15m</option>
+                    </select>
+                    <button 
+                      onClick={() => {
+                        const asset = (document.getElementById('sync-asset') as HTMLSelectElement).value;
+                        const timeframe = (document.getElementById('sync-timeframe') as HTMLSelectElement).value;
+                        const { io } = require('socket.io-client');
+                        const socket = io();
+                        socket.emit('sync_view', { asset, timeframe });
+                        alert(`Synced ${asset} to all users!`);
+                      }}
+                      className="bg-emerald-500 hover:bg-emerald-600 text-white text-[10px] font-bold px-3 py-1 rounded transition-all flex items-center gap-1"
+                    >
+                      <Share2 className="w-3 h-3" />
+                      PUSH TO USERS
+                    </button>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button 
+                    onClick={() => {
+                      const frame = document.getElementById('po-frame') as HTMLIFrameElement;
+                      if (frame) frame.src = frame.src;
+                    }}
+                    className="p-1.5 hover:bg-slate-700 rounded-md text-slate-400 transition-colors"
+                    title="Refresh Browser"
+                  >
+                    <Activity className="w-4 h-4" />
+                  </button>
+                  <a 
+                    href="https://pocketoption.com/en/cabinet/demo-quick-high-low/" 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 bg-indigo-500 hover:bg-indigo-600 text-white px-3 py-1.5 rounded-md text-xs font-medium transition-all"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    Open Full Browser
+                  </a>
+                </div>
+              </div>
+              <div className="flex-1 relative bg-white">
+                <iframe 
+                  id="po-frame"
+                  src="https://pocketoption.com/en/cabinet/demo-quick-high-low/" 
+                  className="w-full h-full border-0"
+                  title="Pocket Option"
+                  allow="camera; microphone; clipboard-read; clipboard-write; display-capture; fullscreen"
+                  sandbox="allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts allow-top-navigation-by-user-activation"
+                />
+                <div className="absolute inset-0 pointer-events-none border-4 border-indigo-500/10 rounded-xl"></div>
+              </div>
+              <div className="bg-slate-800 p-2 text-[10px] text-slate-500 text-center border-t border-slate-700">
+                Note: If the browser is blank, please use the "Open Full Browser" button. Some trading platforms restrict embedding for security.
+              </div>
             </div>
           )}
 
@@ -262,9 +340,9 @@ export default function AdminDashboard() {
                   <tr>
                     <th className="p-4">Short ID</th>
                     <th className="p-4">Email</th>
-                    <th className="p-4">Role</th>
+                    <th className="p-4">Rank</th>
+                    <th className="p-4">Trades</th>
                     <th className="p-4">Pocket Option ID</th>
-                    <th className="p-4">IP Address</th>
                     <th className="p-4">Joined</th>
                     <th className="p-4">Actions</th>
                   </tr>
@@ -275,12 +353,17 @@ export default function AdminDashboard() {
                       <td className="p-4 font-mono text-emerald-400">{u.shortId || u.id.substring(0, 6).toUpperCase()}</td>
                       <td className="p-4 font-medium text-white">{u.email || u.username}</td>
                       <td className="p-4">
-                        <span className={`px-2 py-1 rounded text-xs ${u.role === 'admin' ? 'bg-indigo-500/20 text-indigo-400' : 'bg-slate-700 text-slate-300'}`}>
-                          {u.role}
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                          u.level === 'Elite Legend' ? 'bg-amber-500 text-black' :
+                          u.level === 'Premium Member' ? 'bg-indigo-500 text-white' :
+                          u.level === 'Trade Master' ? 'bg-emerald-500 text-white' :
+                          'bg-slate-700 text-slate-300'
+                        }`}>
+                          {u.level || 'Rookie'}
                         </span>
                       </td>
+                      <td className="p-4 font-mono text-white">{u.trade_count || 0}</td>
                       <td className="p-4 font-mono text-emerald-400">{u.pocketOptionId || 'Not Linked'}</td>
-                      <td className="p-4 font-mono text-slate-400">{u.ipAddress || 'N/A'}</td>
                       <td className="p-4 text-slate-400">{u.createdAt?.toDate ? u.createdAt.toDate().toLocaleString() : 'N/A'}</td>
                       <td className="p-4">
                         <button

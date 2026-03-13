@@ -66,6 +66,8 @@ if (db) {
       password TEXT,
       role TEXT DEFAULT 'user',
       ip_address TEXT,
+      trade_count INTEGER DEFAULT 0,
+      level TEXT DEFAULT 'Rookie',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -384,6 +386,29 @@ app.post('/api/signals/generate', authenticateToken, (req: any, res) => {
   
   const result = db.prepare('INSERT INTO signals (asset, timeframe, signal, user_id, username) VALUES (?, ?, ?, ?, ?)').run(asset, timeframe, signal, req.user.id, req.user.username);
   
+  // Update user trade count and level
+  try {
+    const user = db.prepare('SELECT trade_count FROM users WHERE id = ?').get(req.user.id) as { trade_count: number };
+    const newCount = (user.trade_count || 0) + 1;
+    
+    let newLevel = 'Rookie';
+    if (newCount > 500) newLevel = 'Elite Legend';
+    else if (newCount > 300) newLevel = 'Premium Member';
+    else if (newCount > 150) newLevel = 'Trade Master';
+    else if (newCount > 50) newLevel = 'Pro Trader';
+    else if (newCount > 10) newLevel = 'Active Trader';
+
+    db.prepare('UPDATE users SET trade_count = ?, level = ? WHERE id = ?').run(newCount, newLevel, req.user.id);
+    
+    // If level upgraded, notify user
+    const oldLevel = db.prepare('SELECT level FROM users WHERE id = ?').get(req.user.id) as { level: string };
+    // We check level after update, so we need to know if it changed. 
+    // Let's simplify and just emit the update.
+    io.to(`user_${req.user.id}`).emit('user_update', { trade_count: newCount, level: newLevel });
+  } catch (err) {
+    console.error('Failed to update user level:', err);
+  }
+  
   const newSignal = {
     id: result.lastInsertRowid,
     asset,
@@ -498,6 +523,11 @@ app.post('/api/admin/settings', authenticateToken, requireAdmin, (req, res) => {
 io.on('connection', (socket) => {
   socket.on('join_user_room', (userId) => {
     socket.join(`user_${userId}`);
+  });
+
+  socket.on('sync_view', (data) => {
+    // Broadcast the admin's view (asset/timeframe) to all users
+    io.emit('view_synced', data);
   });
 });
 

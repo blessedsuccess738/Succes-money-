@@ -83,9 +83,21 @@ export default function UserDashboard() {
       setLiveSignals(prev => [newSignal, ...prev].slice(0, 10));
     });
 
+    socket.on('view_synced', (data: { asset: string, timeframe: string }) => {
+      setAsset(data.asset);
+      setTimeframe(data.timeframe);
+      // Optional: show a small toast or notification that view was synced
+      console.log('View synced by admin:', data);
+    });
+
+    socket.on('user_update', (data: { trade_count: number, level: string }) => {
+      setUser((prev: any) => prev ? { ...prev, trade_count: data.trade_count, level: data.level } : null);
+    });
+
     return () => {
       unsubscribeAuth();
       socket.off('new_signal');
+      socket.off('view_synced');
     };
   }, [navigate]);
 
@@ -148,7 +160,19 @@ export default function UserDashboard() {
           <Notifications user={user} />
           
           <div className="hidden sm:flex flex-col items-end mr-2">
-            <span className="text-sm font-medium text-white">{user.username}</span>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-white">{user.username}</span>
+              <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${
+                user.level === 'Elite Legend' ? 'bg-amber-500 text-black' :
+                user.level === 'Premium Member' ? 'bg-indigo-500 text-white' :
+                user.level === 'Trade Master' ? 'bg-emerald-500 text-white' :
+                user.level === 'Pro Trader' ? 'bg-blue-500 text-white' :
+                user.level === 'Active Trader' ? 'bg-slate-600 text-white' :
+                'bg-slate-700 text-slate-400'
+              }`}>
+                {user.level || 'Rookie'}
+              </span>
+            </div>
             <span className="text-xs text-slate-400 font-mono">ID: {user.pocketOptionId}</span>
           </div>
           
@@ -163,7 +187,54 @@ export default function UserDashboard() {
 
         <div className="grid lg:grid-cols-3 gap-8">
           <div className="lg:col-span-2 space-y-8">
-            <div className="bg-slate-800 p-6 rounded-2xl shadow-lg border border-slate-700">
+              <div className="bg-slate-800 p-6 rounded-2xl shadow-lg border border-slate-700">
+                <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                  <TrendingUp className="w-5 h-5 text-emerald-400" />
+                  Reputation Level
+                </h3>
+                <div className="space-y-4">
+                  <div className="flex justify-between items-end">
+                    <div>
+                      <p className="text-2xl font-bold text-white">{user.level || 'Rookie'}</p>
+                      <p className="text-xs text-slate-500 uppercase tracking-widest font-bold">Current Rank</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xl font-mono text-emerald-400 font-bold">{user.trade_count || 0}</p>
+                      <p className="text-xs text-slate-500 uppercase tracking-widest font-bold">Total Trades</p>
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                      <span>Progress to Next Rank</span>
+                      <span>{Math.min(100, Math.floor(((user.trade_count || 0) / 500) * 100))}%</span>
+                    </div>
+                    <div className="w-full bg-slate-700 h-2 rounded-full overflow-hidden">
+                      <div 
+                        className="bg-gradient-to-r from-emerald-500 to-teal-500 h-full transition-all duration-1000"
+                        style={{ width: `${Math.min(100, Math.floor(((user.trade_count || 0) / 500) * 100))}%` }}
+                      ></div>
+                    </div>
+                  </div>
+                  
+                  <div className="grid grid-cols-3 gap-2 pt-2">
+                    <div className={`p-2 rounded-lg border text-center ${user.trade_count >= 150 ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-slate-800/50 border-slate-700 opacity-40'}`}>
+                      <p className="text-[10px] font-bold text-white">MASTER</p>
+                      <p className="text-[8px] text-slate-500">150 Trades</p>
+                    </div>
+                    <div className={`p-2 rounded-lg border text-center ${user.trade_count >= 300 ? 'bg-indigo-500/10 border-indigo-500/20' : 'bg-slate-800/50 border-slate-700 opacity-40'}`}>
+                      <p className="text-[10px] font-bold text-white">PREMIUM</p>
+                      <p className="text-[8px] text-slate-500">300 Trades</p>
+                    </div>
+                    <div className={`p-2 rounded-lg border text-center ${user.trade_count >= 500 ? 'bg-amber-500/10 border-amber-500/20' : 'bg-slate-800/50 border-slate-700 opacity-40'}`}>
+                      <p className="text-[10px] font-bold text-white">LEGEND</p>
+                      <p className="text-[8px] text-slate-500">500 Trades</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-slate-800 p-6 rounded-2xl shadow-lg border border-slate-700">
               <h2 className="text-2xl font-semibold text-white mb-6">Get New Signal</h2>
               
               <div className="space-y-6">
