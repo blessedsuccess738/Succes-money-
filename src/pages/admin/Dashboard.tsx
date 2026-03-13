@@ -1,10 +1,13 @@
-import { useState, useEffect, FormEvent } from 'react';
+import { useState, useEffect, FormEvent, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Shield, Users, Activity, Key, Settings, LogOut, ExternalLink, MessageSquare, Share2, LayoutDashboard, Globe, Power, Trash2, Crown, Ban, CheckCircle2, TrendingUp, TrendingDown } from 'lucide-react';
+import { Shield, Users, Activity, Key, Settings, LogOut, ExternalLink, MessageSquare, Share2, LayoutDashboard, Globe, Power, Trash2, Crown, Ban, CheckCircle2, TrendingUp, TrendingDown, Terminal, Camera, RefreshCw } from 'lucide-react';
 import Notifications from '../../components/Notifications';
 import { auth, db, handleFirestoreError, OperationType } from '../../firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { collection, query, getDocs, addDoc, orderBy, limit, getDoc, doc, serverTimestamp, onSnapshot, where, updateDoc, deleteDoc, setDoc } from 'firebase/firestore';
+import { io } from 'socket.io-client';
+
+const socket = io();
 
 export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState('overview');
@@ -29,6 +32,74 @@ export default function AdminDashboard() {
   
   const [currentUser, setCurrentUser] = useState<any>(null);
   const navigate = useNavigate();
+
+  // Bot Console State
+  const [botLogs, setBotLogs] = useState<{timestamp: string, message: string, userId: string}[]>([]);
+  const [activeSessions, setActiveSessions] = useState<string[]>([]);
+  const [selectedSession, setSelectedSession] = useState<string | null>(null);
+  const [screenshot, setScreenshot] = useState<string | null>(null);
+  const [screenshotLoading, setScreenshotLoading] = useState(false);
+  const logsEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (logsEndRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [botLogs]);
+
+  useEffect(() => {
+    // Listen for bot logs
+    socket.on('bot_log', (log) => {
+      setBotLogs(prev => [...prev, log].slice(-200)); // Keep last 200 logs
+    });
+
+    return () => {
+      socket.off('bot_log');
+    };
+  }, []);
+
+  const fetchBotSessions = async () => {
+    try {
+      const token = localStorage.getItem('admin_token');
+      const res = await fetch('/api/admin/bot/sessions', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (data.sessions) setActiveSessions(data.sessions);
+    } catch (err) {
+      console.error('Failed to fetch bot sessions', err);
+    }
+  };
+
+  const fetchScreenshot = async (userId: string) => {
+    if (!userId) return;
+    setScreenshotLoading(true);
+    try {
+      const token = localStorage.getItem('admin_token');
+      const res = await fetch(`/api/admin/bot/screenshot/${userId}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (data.success) {
+        setScreenshot(data.image);
+      } else {
+        setScreenshot(null);
+      }
+    } catch (err) {
+      console.error('Failed to fetch screenshot', err);
+      setScreenshot(null);
+    } finally {
+      setScreenshotLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'bot-console') {
+      fetchBotSessions();
+      const interval = setInterval(fetchBotSessions, 10000);
+      return () => clearInterval(interval);
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     let unsubscribeUsers: () => void;
@@ -219,6 +290,9 @@ export default function AdminDashboard() {
           </button>
           <button onClick={() => setActiveTab('bot-engine')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'bot-engine' ? 'bg-indigo-500/10 text-indigo-400' : 'hover:bg-slate-800'}`}>
             <Power className="w-5 h-5" /> Bot Engine
+          </button>
+          <button onClick={() => setActiveTab('bot-console')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'bot-console' ? 'bg-indigo-500/10 text-indigo-400' : 'hover:bg-slate-800'}`}>
+            <Terminal className="w-5 h-5" /> Bot Console (Dev)
           </button>
           <button onClick={() => setActiveTab('platform')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'platform' ? 'bg-indigo-500/10 text-indigo-400' : 'hover:bg-slate-800'}`}>
             <Globe className="w-5 h-5" /> Platform Links
@@ -579,6 +653,120 @@ export default function AdminDashboard() {
                   {platformSettings.masterKillSwitch && (
                     <div className="text-rose-500 mt-2 font-bold">[ALERT] MASTER KILL SWITCH ENGAGED. ALL TRADING HALTED.</div>
                   )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* BOT CONSOLE TAB */}
+          {activeTab === 'bot-console' && (
+            <div className="space-y-6 flex flex-col h-full">
+              <div className="flex items-center justify-between">
+                <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+                  <Terminal className="w-6 h-6 text-indigo-400" />
+                  Bot Console (Dev Tools)
+                </h2>
+                <button 
+                  onClick={fetchBotSessions}
+                  className="bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  Refresh Sessions
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 flex-1 min-h-[600px]">
+                {/* Left Column: Live Terminal */}
+                <div className="lg:col-span-2 bg-slate-900 border border-slate-700 rounded-xl overflow-hidden flex flex-col">
+                  <div className="bg-slate-800 px-4 py-2 border-b border-slate-700 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="w-3 h-3 rounded-full bg-rose-500"></div>
+                      <div className="w-3 h-3 rounded-full bg-amber-500"></div>
+                      <div className="w-3 h-3 rounded-full bg-emerald-500"></div>
+                      <span className="ml-2 text-xs text-slate-400 font-mono">puppeteer-engine.log</span>
+                    </div>
+                    <button onClick={() => setBotLogs([])} className="text-xs text-slate-500 hover:text-white">Clear</button>
+                  </div>
+                  <div className="flex-1 p-4 overflow-y-auto font-mono text-xs sm:text-sm bg-[#0A0A0A]">
+                    {botLogs.length === 0 ? (
+                      <div className="text-slate-600 italic">Waiting for bot activity...</div>
+                    ) : (
+                      botLogs.map((log, i) => (
+                        <div key={i} className="mb-1 flex gap-3">
+                          <span className="text-slate-500 shrink-0">[{new Date(log.timestamp).toLocaleTimeString()}]</span>
+                          <span className="text-emerald-400 shrink-0">[{log.userId.substring(0,6)}]</span>
+                          <span className="text-slate-300">{log.message}</span>
+                        </div>
+                      ))
+                    )}
+                    <div ref={logsEndRef} />
+                  </div>
+                </div>
+
+                {/* Right Column: Sessions & Screenshots */}
+                <div className="space-y-6 flex flex-col">
+                  <div className="bg-slate-800 border border-slate-700 rounded-xl p-4 flex-1 overflow-y-auto max-h-[300px]">
+                    <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                      <Activity className="w-5 h-5 text-emerald-400" />
+                      Active Sessions ({activeSessions.length})
+                    </h3>
+                    {activeSessions.length === 0 ? (
+                      <p className="text-slate-500 text-sm">No active browser sessions.</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {activeSessions.map(id => (
+                          <button
+                            key={id}
+                            onClick={() => {
+                              setSelectedSession(id);
+                              fetchScreenshot(id);
+                            }}
+                            className={`w-full text-left px-4 py-3 rounded-lg border transition-all ${selectedSession === id ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-300' : 'bg-slate-900/50 border-slate-700 text-slate-300 hover:bg-slate-700'}`}
+                          >
+                            <div className="font-mono text-sm">User ID: {id.substring(0, 8)}...</div>
+                            <div className="text-xs text-emerald-400 mt-1 flex items-center gap-1">
+                              <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+                              Browser Active
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="bg-slate-800 border border-slate-700 rounded-xl p-4 flex-1 flex flex-col min-h-[300px]">
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                        <Camera className="w-5 h-5 text-indigo-400" />
+                        Live Viewer
+                      </h3>
+                      {selectedSession && (
+                        <button 
+                          onClick={() => fetchScreenshot(selectedSession)}
+                          disabled={screenshotLoading}
+                          className="text-xs bg-indigo-500 hover:bg-indigo-600 disabled:bg-slate-700 text-white px-3 py-1.5 rounded flex items-center gap-1"
+                        >
+                          <RefreshCw className={`w-3 h-3 ${screenshotLoading ? 'animate-spin' : ''}`} />
+                          Capture
+                        </button>
+                      )}
+                    </div>
+                    
+                    <div className="flex-1 bg-slate-900 rounded-lg border border-slate-700 overflow-hidden flex items-center justify-center relative">
+                      {!selectedSession ? (
+                        <p className="text-slate-500 text-sm text-center px-4">Select an active session above to view its live browser screen.</p>
+                      ) : screenshotLoading && !screenshot ? (
+                        <div className="flex flex-col items-center gap-2 text-indigo-400">
+                          <RefreshCw className="w-6 h-6 animate-spin" />
+                          <span className="text-sm">Capturing...</span>
+                        </div>
+                      ) : screenshot ? (
+                        <img src={screenshot} alt="Browser Screenshot" className="w-full h-full object-contain" />
+                      ) : (
+                        <p className="text-rose-400 text-sm text-center px-4">Failed to capture screenshot. The session may have closed.</p>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>

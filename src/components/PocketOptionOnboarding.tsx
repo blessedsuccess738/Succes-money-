@@ -15,21 +15,22 @@ export default function PocketOptionOnboarding({ user, onComplete }: PocketOptio
   const [pocketPassword, setPocketPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [affiliateLink, setAffiliateLink] = useState('https://pocketoption.com/register');
+
+  useEffect(() => {
+    fetch('/api/public/settings')
+      .then(res => res.json())
+      .then(data => {
+        if (data.pocket_option_affiliate_link) {
+          setAffiliateLink(data.pocket_option_affiliate_link);
+        }
+      })
+      .catch(console.error);
+  }, []);
 
   const handleCreateAccount = () => {
-    // Open Pocket Option in a new tab or built-in browser
-    // For now, we'll open it in a new tab, but the user requested a built-in browser.
-    // We can simulate the built-in browser by opening a modal with an iframe,
-    // but Pocket Option might block iframes (X-Frame-Options).
-    // Let's use window.open for now, and we can refine it if needed.
-    window.open('https://pocketoption.com/en/cabinet/demo-quick-high-low/', '_blank');
-    
-    // Simulate background detection of account creation
-    setLoading(true);
-    setTimeout(() => {
-      setLoading(false);
-      setStep(2);
-    }, 5000); // Wait 5 seconds to simulate them creating an account
+    // Open Pocket Option in a built-in browser (iframe modal)
+    setStep(1.5); // Intermediate step to show the iframe
   };
 
   const handleLinkAccount = async () => {
@@ -56,15 +57,24 @@ export default function PocketOptionOnboarding({ user, onComplete }: PocketOptio
       // Simulate analysis delay
       await new Promise(resolve => setTimeout(resolve, 3000));
 
-      // Save to Firestore
-      const userRef = doc(db, 'users', user.uid);
-      await updateDoc(userRef, {
-        pocketOptionId: pocketId,
-        pocketOptionEmail: pocketEmail,
-        // In a real production app, passwords should be heavily encrypted before storing,
-        // or stored in a secure vault. For this prototype, we store it to enable the puppeteer bot.
-        pocketOptionPassword: pocketPassword 
+      // Call backend to securely store encrypted credentials
+      const token = localStorage.getItem('token');
+      const response = await fetch('/api/auth/pocket-option', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          pocketOptionId: pocketId,
+          pocketOptionEmail: pocketEmail,
+          pocketOptionPassword: pocketPassword
+        })
       });
+
+      if (!response.ok) {
+        throw new Error('Failed to securely link account');
+      }
 
       onComplete(pocketId);
     } catch (err: any) {
@@ -118,23 +128,36 @@ export default function PocketOptionOnboarding({ user, onComplete }: PocketOptio
                 disabled={loading}
                 className="w-full max-w-sm mx-auto bg-indigo-500 hover:bg-indigo-600 disabled:bg-slate-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-indigo-500/20 transition-all flex items-center justify-center gap-2 text-lg"
               >
-                {loading ? (
-                  <>
-                    <Loader2 className="w-6 h-6 animate-spin" />
-                    Waiting for account creation...
-                  </>
-                ) : (
-                  <>
-                    Open Pocket Option
-                    <ChevronRight className="w-5 h-5" />
-                  </>
-                )}
+                Open Built-in Browser
+                <ChevronRight className="w-5 h-5" />
               </button>
-              {loading && (
-                <p className="text-sm text-emerald-400 animate-pulse mt-4">
-                  Monitoring for successful registration...
-                </p>
-              )}
+            </div>
+          )}
+
+          {step === 1.5 && (
+            <div className="animate-in fade-in zoom-in duration-300 h-full flex flex-col">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-bold text-white">Pocket Option Registration</h3>
+                <button 
+                  onClick={() => setStep(2)}
+                  className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-bold transition-colors"
+                >
+                  I Have Registered &rarr;
+                </button>
+              </div>
+              <div className="flex-1 bg-slate-900 rounded-xl border border-slate-700 overflow-hidden relative min-h-[400px]">
+                {/* Note: Pocket Option may block iframe embedding via X-Frame-Options. 
+                    If it shows a blank screen, the user will need to use the fallback button. */}
+                <iframe 
+                  src={affiliateLink} 
+                  className="w-full h-full border-0 absolute inset-0"
+                  title="Pocket Option Registration"
+                  sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
+                />
+              </div>
+              <p className="text-xs text-slate-500 mt-4 text-center">
+                If the browser above is blank (due to security restrictions), please <a href={affiliateLink} target="_blank" rel="noreferrer" className="text-indigo-400 underline">click here to open in a new tab</a>, then click "I Have Registered".
+              </p>
             </div>
           )}
 

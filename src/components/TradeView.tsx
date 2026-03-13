@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { TrendingUp, TrendingDown, Clock } from 'lucide-react';
+import { TrendingUp, TrendingDown, Clock, ArrowUpCircle, ArrowDownCircle, MonitorPlay, LineChart } from 'lucide-react';
 
 interface TradeViewProps {
   asset: string;
@@ -17,13 +17,26 @@ export default function TradeView({ asset, timeframe, signal }: TradeViewProps) 
   const [price, setPrice] = useState(1.05432);
   const [direction, setDirection] = useState<'up' | 'down'>('up');
   const [countdown, setCountdown] = useState<number | null>(null);
+  const [viewMode, setViewMode] = useState<'chart' | 'broker'>('chart');
+  const [affiliateLink, setAffiliateLink] = useState('https://pocketoption.com/register');
   const container = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    fetch('/api/public/settings')
+      .then(res => res.json())
+      .then(data => {
+        if (data.pocket_option_affiliate_link) {
+          setAffiliateLink(data.pocket_option_affiliate_link);
+        }
+      })
+      .catch(console.error);
+  }, []);
 
   useEffect(() => {
     let tvWidget: any = null;
     
     const initWidget = () => {
-      if (container.current && window.TradingView) {
+      if (viewMode === 'chart' && container.current && window.TradingView) {
         // Clear previous widget
         container.current.innerHTML = '';
         
@@ -54,7 +67,9 @@ export default function TradeView({ asset, timeframe, signal }: TradeViewProps) 
       script.onload = initWidget;
       document.head.appendChild(script);
     } else {
-      initWidget();
+      if (viewMode === 'chart') {
+        initWidget();
+      }
     }
 
     return () => {
@@ -66,7 +81,7 @@ export default function TradeView({ asset, timeframe, signal }: TradeViewProps) 
         }
       }
     };
-  }, [asset, timeframe]);
+  }, [asset, timeframe, viewMode]);
 
   // Simulate live price updates (keeping for the UI display)
   useEffect(() => {
@@ -129,19 +144,63 @@ export default function TradeView({ asset, timeframe, signal }: TradeViewProps) 
           </div>
 
           {/* Timeframe Info */}
-          <div className="text-right hidden md:block">
-            <div className="text-sm text-slate-400 font-medium uppercase tracking-wider mb-1">Timeframe</div>
-            <div className="text-lg font-bold text-white bg-slate-700/50 px-4 py-2 rounded-lg border border-slate-600">
-              {timeframe}
+          <div className="flex items-center gap-4">
+            <div className="bg-slate-900/50 p-1 rounded-xl border border-slate-700 flex">
+              <button 
+                onClick={() => setViewMode('chart')}
+                className={`px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-bold transition-all ${viewMode === 'chart' ? 'bg-indigo-500 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}
+              >
+                <LineChart className="w-4 h-4" />
+                Pro Chart
+              </button>
+              <button 
+                onClick={() => setViewMode('broker')}
+                className={`px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-bold transition-all ${viewMode === 'broker' ? 'bg-indigo-500 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}
+              >
+                <MonitorPlay className="w-4 h-4" />
+                Broker View
+              </button>
+            </div>
+            <div className="text-right hidden md:block">
+              <div className="text-sm text-slate-400 font-medium uppercase tracking-wider mb-1">Timeframe</div>
+              <div className="text-lg font-bold text-white bg-slate-700/50 px-4 py-2 rounded-lg border border-slate-600">
+                {timeframe}
+              </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* TradingView Widget with Overlay */}
-      <div className="bg-slate-800 rounded-2xl shadow-xl border border-slate-700 overflow-hidden h-[500px] relative">
-        <div id="tradingview_widget" ref={container} className="w-full h-full" />
+      {/* Main View Area */}
+      <div className="bg-slate-800 rounded-2xl shadow-xl border border-slate-700 overflow-hidden h-[600px] relative">
+        {viewMode === 'chart' ? (
+          <div id="tradingview_widget" ref={container} className="w-full h-full" />
+        ) : (
+          <div className="w-full h-full bg-slate-900 relative">
+            <iframe 
+              src={affiliateLink} 
+              className="w-full h-full border-0 absolute inset-0"
+              title="Pocket Option Broker"
+              sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
+            />
+            <div className="absolute top-4 left-4 right-4 bg-amber-500/10 border border-amber-500/20 text-amber-400 p-3 rounded-xl text-xs text-center backdrop-blur-md">
+              Note: If the broker view is blank, Pocket Option may be blocking embedded browsers. Use the Pro Chart instead.
+            </div>
+          </div>
+        )}
         
+        {/* Manual Trading Buttons Overlay */}
+        <div className="absolute bottom-6 right-6 flex gap-4 z-40">
+          <button className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-4 px-10 rounded-xl shadow-[0_0_30px_rgba(16,185,129,0.3)] transition-all flex items-center gap-3 text-xl border-2 border-emerald-400/50 hover:scale-105 active:scale-95">
+            <ArrowUpCircle className="w-8 h-8" />
+            BUY
+          </button>
+          <button className="bg-rose-500 hover:bg-rose-600 text-white font-bold py-4 px-10 rounded-xl shadow-[0_0_30px_rgba(244,63,94,0.3)] transition-all flex items-center gap-3 text-xl border-2 border-rose-400/50 hover:scale-105 active:scale-95">
+            <ArrowDownCircle className="w-8 h-8" />
+            SELL
+          </button>
+        </div>
+
         {/* On-Chart Signal Overlay (HUD) */}
         {signal && countdown !== null && (
           <div className="absolute inset-0 z-50 flex items-center justify-center pointer-events-none bg-slate-900/40 backdrop-blur-sm">

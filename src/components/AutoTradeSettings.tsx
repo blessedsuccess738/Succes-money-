@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { X, Save, AlertCircle, CheckCircle2, DollarSign, TrendingUp, TrendingDown } from 'lucide-react';
-import { db } from '../firebase';
+import { db, auth } from '../firebase';
 import { doc, updateDoc } from 'firebase/firestore';
 
 interface AutoTradeSettingsProps {
@@ -28,6 +28,21 @@ export default function AutoTradeSettings({ user, onClose, onSave }: AutoTradeSe
     setSuccess(false);
 
     try {
+      const token = await auth.currentUser?.getIdToken();
+      
+      // Save to SQLite backend
+      const res = await fetch('/api/user/settings', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ auto_trade_amount: Number(tradeAmount) })
+      });
+
+      if (!res.ok) throw new Error('Failed to save backend settings');
+
+      // Save to Firestore for other settings
       const settings = {
         tradeAmount: Number(tradeAmount),
         takeProfit: Number(takeProfit),

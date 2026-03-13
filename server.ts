@@ -8,6 +8,8 @@ import { fileURLToPath } from 'url';
 import http from 'http';
 import { Server } from 'socket.io';
 import admin from 'firebase-admin';
+import crypto from 'crypto';
+import { connectToPocketOption, disconnectPocketOption, getSessionScreenshot, getActiveSessions, placeTrade } from './botEngine.js';
 
 // Initialize Firebase Admin
 try {
@@ -28,6 +30,26 @@ const io = new Server(httpServer, {
 
 const PORT = 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_key_change_me_in_production';
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || '12345678901234567890123456789012'; // Must be 32 bytes
+const IV_LENGTH = 16;
+
+function encrypt(text: string) {
+  const iv = crypto.randomBytes(IV_LENGTH);
+  const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY), iv);
+  let encrypted = cipher.update(text);
+  encrypted = Buffer.concat([encrypted, cipher.final()]);
+  return iv.toString('hex') + ':' + encrypted.toString('hex');
+}
+
+function decrypt(text: string) {
+  const textParts = text.split(':');
+  const iv = Buffer.from(textParts.shift()!, 'hex');
+  const encryptedText = Buffer.from(textParts.join(':'), 'hex');
+  const decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY), iv);
+  let decrypted = decipher.update(encryptedText);
+  decrypted = Buffer.concat([decrypted, decipher.final()]);
+  return decrypted.toString();
+}
 
 app.use(express.json());
 app.use(cookieParser());
@@ -70,6 +92,11 @@ if (db) {
       level TEXT DEFAULT 'Rookie',
       balance REAL DEFAULT 0,
       is_live_synced BOOLEAN DEFAULT 0,
+      auto_trade_amount REAL DEFAULT 1.0,
+      total_profit REAL DEFAULT 0,
+      total_loss REAL DEFAULT 0,
+      win_count INTEGER DEFAULT 0,
+      loss_count INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -118,6 +145,26 @@ if (db) {
   } catch (e) {}
 
   try {
+    db.exec(`ALTER TABLE users ADD COLUMN total_profit REAL DEFAULT 0;`);
+  } catch (e) {}
+
+  try {
+    db.exec(`ALTER TABLE users ADD COLUMN auto_trade_amount REAL DEFAULT 1.0;`);
+  } catch (e) {}
+
+  try {
+    db.exec(`ALTER TABLE users ADD COLUMN total_loss REAL DEFAULT 0;`);
+  } catch (e) {}
+
+  try {
+    db.exec(`ALTER TABLE users ADD COLUMN win_count INTEGER DEFAULT 0;`);
+  } catch (e) {}
+
+  try {
+    db.exec(`ALTER TABLE users ADD COLUMN loss_count INTEGER DEFAULT 0;`);
+  } catch (e) {}
+
+  try {
     db.exec(`ALTER TABLE signals ADD COLUMN username TEXT;`);
   } catch (e) {}
 
@@ -140,6 +187,11 @@ if (db) {
   const apiKeyExists = db.prepare('SELECT * FROM settings WHERE key = ?').get('pocket_option_api_key');
   if (!apiKeyExists) {
     db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('pocket_option_api_key', '');
+  }
+
+  const affLinkExists = db.prepare('SELECT * FROM settings WHERE key = ?').get('pocket_option_affiliate_link');
+  if (!affLinkExists) {
+    db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('pocket_option_affiliate_link', 'https://pocketoption.com/register?a=YOUR_AFFILIATE_ID');
   }
 
   const webhookSecretExists = db.prepare('SELECT * FROM settings WHERE key = ?').get('webhook_secret');
@@ -184,6 +236,20 @@ const requireAdmin = (req: any, res: any, next: any) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
   next();
 };
+
+// Public Routes
+app.get('/api/public/settings', (req, res) => {
+  try {
+    const settings = db.prepare('SELECT key, value FROM settings WHERE key IN (?, ?)').all('pocket_option_affiliate_link', 'public_link');
+    const settingsMap = settings.reduce((acc: any, curr: any) => {
+      acc[curr.key] = curr.value;
+      return acc;
+    }, {});
+    res.json(settingsMap);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch settings' });
+  }
+});
 
 // Webhook Routes
 app.post('/api/webhooks/:source', (req, res) => {
@@ -349,7 +415,7 @@ app.post('/api/auth/verify-code', authenticateToken, (req: any, res) => {
 
 app.get('/api/user/profile', authenticateToken, (req: any, res) => {
   try {
-    const user = db.prepare('SELECT trade_count, level, balance, is_live_synced, pocket_option_id FROM users WHERE id = ?').get(req.user.id) as any;
+    const user = db.prepare('SELECT trade_count, level, balance, is_live_synced, auto_trade_amount, pocket_option_id, total_profit, total_loss, win_count, loss_count FROM users WHERE id = ?').get(req.user.id) as any;
     if (!user) return res.status(404).json({ error: 'User not found' });
     res.json(user);
   } catch (err) {
@@ -357,26 +423,74 @@ app.get('/api/user/profile', authenticateToken, (req: any, res) => {
   }
 });
 
-app.post('/api/auth/pocket-option', authenticateToken, (req: any, res) => {
-  const { pocketOptionId } = req.body;
-  if (!pocketOptionId) return res.status(400).json({ error: 'Pocket Option ID is required' });
+app.post('/api/user/settings', authenticateToken, (req: any, res) => {
+  const { auto_trade_amount } = req.body;
+  
+  if (typeof auto_trade_amount !== 'number' || auto_trade_amount <= 0) {
+    return res.status(400).json({ error: 'Invalid trade amount' });
+  }
 
   try {
+    db.prepare('UPDATE users SET auto_trade_amount = ? WHERE id = ?').run(auto_trade_amount, req.user.id);
+    res.json({ success: true, auto_trade_amount });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update settings' });
+  }
+});
+
+app.post('/api/auth/pocket-option', authenticateToken, async (req: any, res) => {
+  const { pocketOptionId, pocketOptionEmail, pocketOptionPassword } = req.body;
+  if (!pocketOptionId || !pocketOptionEmail || !pocketOptionPassword) {
+    return res.status(400).json({ error: 'All Pocket Option credentials are required' });
+  }
+
+  try {
+    // Encrypt the password before storing
+    const encryptedPassword = encrypt(pocketOptionPassword);
+
+    // Update SQLite
     db.prepare('UPDATE users SET pocket_option_id = ? WHERE id = ?').run(pocketOptionId, req.user.id);
     
+    // Update Firestore via Admin SDK
+    await admin.firestore().collection('users').doc(req.user.id).update({
+      pocketOptionId,
+      pocketOptionEmail,
+      pocketOptionPassword: encryptedPassword // Store encrypted password
+    });
+
+    // Test the connection using Puppeteer
+    io.to(`user_${req.user.id}`).emit('user_notification', { id: Date.now(), title: 'Connecting...', message: 'Testing connection to Pocket Option...', type: 'user', created_at: new Date().toISOString() });
+    
+    const onLog = (msg: string) => {
+      io.emit('bot_log', { userId: req.user.id, message: msg, timestamp: new Date().toISOString() });
+    };
+
+    // We run this asynchronously so we don't block the response, but we could also await it
+    // For now, we'll await it to ensure it works before returning success
+    const connectionResult = await connectToPocketOption(req.user.id, pocketOptionEmail, pocketOptionPassword, onLog);
+    
+    if (!connectionResult.success) {
+      // If connection fails, we might want to revert the save or just notify the user
+      return res.status(400).json({ error: 'Failed to connect to Pocket Option. Please check your credentials.' });
+    }
+
+    // Don't disconnect immediately so the admin can debug the session in the Dev Tool
+    // await disconnectPocketOption(req.user.id);
+
     // Notify user
-    const userMsg = `Your Pocket Option ID (${pocketOptionId}) has been verified.`;
-    const notifResult = db.prepare('INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)').run(req.user.id, 'Verification Complete', userMsg, 'user');
-    io.to(`user_${req.user.id}`).emit('user_notification', { id: notifResult.lastInsertRowid, title: 'Verification Complete', message: userMsg, type: 'user', created_at: new Date().toISOString() });
+    const userMsg = `Your Pocket Option ID (${pocketOptionId}) has been securely linked and verified.`;
+    const notifResult = db.prepare('INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)').run(req.user.id, 'Connection Secure', userMsg, 'user');
+    io.to(`user_${req.user.id}`).emit('user_notification', { id: notifResult.lastInsertRowid, title: 'Connection Secure', message: userMsg, type: 'user', created_at: new Date().toISOString() });
     
     // Notify admin
-    const adminMsg = `User ${req.user.username} verified Pocket Option ID: ${pocketOptionId}`;
-    const adminNotifResult = db.prepare('INSERT INTO notifications (title, message, type) VALUES (?, ?, ?)').run('ID Verified', adminMsg, 'admin');
-    io.emit('admin_notification', { id: adminNotifResult.lastInsertRowid, title: 'ID Verified', message: adminMsg, type: 'admin', created_at: new Date().toISOString() });
+    const adminMsg = `User ${req.user.username} securely linked Pocket Option ID: ${pocketOptionId}`;
+    const adminNotifResult = db.prepare('INSERT INTO notifications (title, message, type) VALUES (?, ?, ?)').run('Account Linked', adminMsg, 'admin');
+    io.emit('admin_notification', { id: adminNotifResult.lastInsertRowid, title: 'Account Linked', message: adminMsg, type: 'admin', created_at: new Date().toISOString() });
 
-    res.json({ success: true, message: 'Pocket Option ID linked successfully' });
+    res.json({ success: true, message: 'Pocket Option account securely linked' });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to link account' });
+    console.error('Failed to link account:', err);
+    res.status(500).json({ error: 'Failed to securely link account' });
   }
 });
 
@@ -498,8 +612,69 @@ app.post('/api/notifications/read', authenticateToken, (req: any, res) => {
 });
 
 // Admin Routes
+// --- Signal Listener & Auto-Trade Execution ---
+function setupSignalListener() {
+  try {
+    const q = admin.firestore().collection('signals').orderBy('timestamp', 'desc').limit(1);
+    
+    q.onSnapshot(async (snapshot) => {
+      if (snapshot.empty) return;
+      
+      const signal = snapshot.docs[0].data();
+      const signalId = snapshot.docs[0].id;
+      
+      // Check if we already processed this signal (simple in-memory check for now)
+      if ((global as any).lastProcessedSignalId === signalId) return;
+      (global as any).lastProcessedSignalId = signalId;
+
+      console.log(`[Auto-Trade] New signal detected: ${signal.asset} ${signal.signal}`);
+
+      // Find all users with Auto-Trade enabled
+      const activeUsers = db.prepare('SELECT * FROM users WHERE is_live_synced = 1 AND isBanned = 0').all() as any[];
+      
+      for (const user of activeUsers) {
+        const onLog = (msg: string) => {
+          io.emit('bot_log', { userId: user.id.toString(), message: msg, timestamp: new Date().toISOString() });
+        };
+
+        try {
+          // Execute trade via bot engine
+          const result = await placeTrade(
+            user.id.toString(), 
+            signal.asset, 
+            signal.signal as 'Buy' | 'Sell', 
+            user.auto_trade_amount || 1.0, 
+            signal.timeframe || '1m',
+            onLog
+          );
+
+          if (result.success) {
+            io.to(`user_${user.id}`).emit('user_notification', {
+              id: Date.now(),
+              title: 'Trade Placed',
+              message: `Auto-trade executed: ${signal.asset} ${signal.signal} ($${user.auto_trade_amount})`,
+              type: 'user',
+              created_at: new Date().toISOString()
+            });
+          }
+        } catch (err: any) {
+          console.error(`[Auto-Trade] Failed for user ${user.id}:`, err.message);
+          onLog(`Auto-trade failed: ${err.message}`);
+        }
+      }
+    }, (error) => {
+      console.error('[Auto-Trade] Firestore listener error:', error);
+    });
+  } catch (err) {
+    console.error('[Auto-Trade] Failed to setup signal listener:', err);
+  }
+}
+
+// Start the listener after a short delay to ensure DB is ready
+setTimeout(setupSignalListener, 5000);
+
 app.get('/api/admin/users', authenticateToken, requireAdmin, (req, res) => {
-  const users = db.prepare('SELECT id, username, role, ip_address, created_at, pocket_option_id FROM users').all();
+  const users = db.prepare('SELECT id, username, role, ip_address, created_at, pocket_option_id, total_profit, total_loss, win_count, loss_count FROM users').all();
   res.json(users);
 });
 
@@ -533,8 +708,26 @@ app.get('/api/admin/codes', authenticateToken, requireAdmin, (req, res) => {
   res.json(codes);
 });
 
+// Admin Bot Routes
+app.get('/api/admin/bot/sessions', authenticateToken, requireAdmin, (req, res) => {
+  res.json({ sessions: getActiveSessions() });
+});
+
+app.get('/api/admin/bot/screenshot/:userId', authenticateToken, requireAdmin, async (req, res) => {
+  const base64 = await getSessionScreenshot(req.params.userId);
+  if (base64) {
+    res.json({ success: true, image: `data:image/png;base64,${base64}` });
+  } else {
+    res.status(404).json({ error: 'No active session or page closed' });
+  }
+});
+
 app.post('/api/admin/codes/generate', authenticateToken, requireAdmin, (req, res) => {
-  const code = Math.random().toString(36).substring(2, 10).toUpperCase();
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let code = '';
+  for (let i = 0; i < 12; i++) {
+    code += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
   db.prepare('INSERT INTO access_codes (code) VALUES (?)').run(code);
   res.json({ success: true, code });
 });
