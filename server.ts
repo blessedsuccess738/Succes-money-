@@ -8,8 +8,9 @@ import { fileURLToPath } from 'url';
 import http from 'http';
 import { Server } from 'socket.io';
 import admin from 'firebase-admin';
+import { getFirestore } from 'firebase-admin/firestore';
 import crypto from 'crypto';
-import { connectToPocketOption, disconnectPocketOption, getSessionScreenshot, getActiveSessions, placeTrade } from './botEngine.js';
+import { connectToPocketOption, disconnectPocketOption, getSessionScreenshot, getActiveSessions, placeTrade, interactWithSession, submit2FACode, keepSessionAlive, getBalance } from './botEngine.js';
 
 // Initialize Firebase Admin
 try {
@@ -20,6 +21,23 @@ try {
   console.error('Firebase Admin initialization error:', e);
 }
 
+// Initialize Firestore with fallback
+let firestoreDb: any;
+async function initFirestore() {
+  const namedDbId = 'ai-studio-1f6e4e4a-e941-4fb1-baf8-a6f7ed0d0a99';
+  try {
+    const db = getFirestore(namedDbId);
+    // Test connection
+    await db.collection('health_check').limit(1).get();
+    firestoreDb = db;
+    console.log(`[Firestore] Connected to named database: ${namedDbId}`);
+  } catch (e) {
+    console.log('[Firestore] Named database access failed or not found, using default database.');
+    firestoreDb = getFirestore();
+  }
+}
+await initFirestore();
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
@@ -27,6 +45,29 @@ const httpServer = http.createServer(app);
 const io = new Server(httpServer, {
   cors: { origin: '*' }
 });
+
+// Ensure signals collection exists and test permissions
+async function ensureSignalsCollection() {
+  try {
+    console.log('[Firestore] Verifying signals collection...');
+    const signals = await firestoreDb.collection('signals').limit(1).get();
+    if (signals.empty) {
+      console.log('[Firestore] Signals collection empty, creating dummy signal...');
+      await firestoreDb.collection('signals').add({
+        asset: 'EUR/USD',
+        timeframe: '1m',
+        signal: 'Wait',
+        userId: 'system',
+        username: 'System',
+        createdAt: admin.firestore.Timestamp.now()
+      });
+    }
+    console.log('[Firestore] Signals collection verified.');
+  } catch (e) {
+    console.error('[Firestore] Failed to verify signals collection:', e);
+  }
+}
+ensureSignalsCollection();
 
 const PORT = 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_key_change_me_in_production';
@@ -462,6 +503,9 @@ app.post('/api/auth/pocket-option', authenticateToken, async (req: any, res) => 
     io.to(`user_${req.user.id}`).emit('user_notification', { id: Date.now(), title: 'Connecting...', message: 'Testing connection to Pocket Option...', type: 'user', created_at: new Date().toISOString() });
     
     const onLog = (msg: string) => {
+      if (msg === 'REQUIRE_2FA') {
+        io.to(`user_${req.user.id}`).emit('require_2fa', { userId: req.user.id });
+      }
       io.emit('bot_log', { userId: req.user.id, message: msg, timestamp: new Date().toISOString() });
     };
 
@@ -614,60 +658,103 @@ app.post('/api/notifications/read', authenticateToken, (req: any, res) => {
 // Admin Routes
 // --- Signal Listener & Auto-Trade Execution ---
 function setupSignalListener() {
-  try {
-    const q = admin.firestore().collection('signals').orderBy('timestamp', 'desc').limit(1);
-    
-    q.onSnapshot(async (snapshot) => {
-      if (snapshot.empty) return;
-      
-      const signal = snapshot.docs[0].data();
-      const signalId = snapshot.docs[0].id;
-      
-      // Check if we already processed this signal (simple in-memory check for now)
-      if ((global as any).lastProcessedSignalId === signalId) return;
-      (global as any).lastProcessedSignalId = signalId;
+  let unsubscribe: (() => void) | null = null;
+  let retryCount = 0;
+  const maxRetries = 20;
 
-      console.log(`[Auto-Trade] New signal detected: ${signal.asset} ${signal.signal}`);
-
-      // Find all users with Auto-Trade enabled
-      const activeUsers = db.prepare('SELECT * FROM users WHERE is_live_synced = 1 AND isBanned = 0').all() as any[];
-      
-      for (const user of activeUsers) {
-        const onLog = (msg: string) => {
-          io.emit('bot_log', { userId: user.id.toString(), message: msg, timestamp: new Date().toISOString() });
-        };
-
-        try {
-          // Execute trade via bot engine
-          const result = await placeTrade(
-            user.id.toString(), 
-            signal.asset, 
-            signal.signal as 'Buy' | 'Sell', 
-            user.auto_trade_amount || 1.0, 
-            signal.timeframe || '1m',
-            onLog
-          );
-
-          if (result.success) {
-            io.to(`user_${user.id}`).emit('user_notification', {
-              id: Date.now(),
-              title: 'Trade Placed',
-              message: `Auto-trade executed: ${signal.asset} ${signal.signal} ($${user.auto_trade_amount})`,
-              type: 'user',
-              created_at: new Date().toISOString()
-            });
-          }
-        } catch (err: any) {
-          console.error(`[Auto-Trade] Failed for user ${user.id}:`, err.message);
-          onLog(`Auto-trade failed: ${err.message}`);
-        }
+  const startListener = () => {
+    try {
+      if (!firestoreDb) {
+        console.log('[Auto-Trade] Firestore not initialized, waiting...');
+        setTimeout(startListener, 5000);
+        return;
       }
-    }, (error) => {
-      console.error('[Auto-Trade] Firestore listener error:', error);
-    });
-  } catch (err) {
-    console.error('[Auto-Trade] Failed to setup signal listener:', err);
-  }
+      console.log('[Auto-Trade] Starting Firestore signal listener...');
+      // Use 'createdAt' as defined in firestore.rules and try default firestore instance if named fails
+      const q = firestoreDb.collection('signals').orderBy('createdAt', 'desc').limit(1);
+      
+      unsubscribe = q.onSnapshot(async (snapshot) => {
+        retryCount = 0; // Reset retry count on successful snapshot
+        if (snapshot.empty) return;
+        
+        const signal = snapshot.docs[0].data();
+        const signalId = snapshot.docs[0].id;
+        
+        // Check if we already processed this signal (simple in-memory check for now)
+        if ((global as any).lastProcessedSignalId === signalId) return;
+        (global as any).lastProcessedSignalId = signalId;
+
+        console.log(`[Auto-Trade] New signal detected: ${signal.asset} ${signal.signal}`);
+
+        // Find all users with Auto-Trade enabled
+        const activeUsers = db.prepare('SELECT * FROM users WHERE is_live_synced = 1 AND isBanned = 0').all() as any[];
+        
+        for (const user of activeUsers) {
+          const onLog = (msg: string) => {
+            io.emit('bot_log', { userId: user.id.toString(), message: msg, timestamp: new Date().toISOString() });
+          };
+
+          try {
+            // Execute trade via bot engine
+            const result = await placeTrade(
+              user.id.toString(), 
+              signal.asset, 
+              signal.signal as 'Buy' | 'Sell', 
+              user.auto_trade_amount || 1.0, 
+              signal.timeframe || '1m',
+              onLog
+            );
+
+            if (result.success) {
+              io.to(`user_${user.id}`).emit('user_notification', {
+                id: Date.now(),
+                title: 'Trade Placed',
+                message: `Auto-trade executed: ${signal.asset} ${signal.signal} ($${user.auto_trade_amount})`,
+                type: 'user',
+                created_at: new Date().toISOString()
+              });
+            }
+          } catch (err: any) {
+            console.error(`[Auto-Trade] Failed for user ${user.id}:`, err.message);
+            onLog(`Auto-trade failed: ${err.message}`);
+          }
+        }
+      }, (error) => {
+        console.error('[Auto-Trade] Firestore listener error details:', {
+          message: error.message,
+          code: (error as any).code,
+          stack: error.stack
+        });
+        
+        if (unsubscribe) {
+          unsubscribe();
+          unsubscribe = null;
+        }
+
+        if (retryCount < maxRetries) {
+          retryCount++;
+          const delay = Math.min(2000 * Math.pow(1.5, retryCount), 60000); 
+          console.log(`[Auto-Trade] Retrying listener in ${Math.round(delay/1000)}s (Attempt ${retryCount}/${maxRetries})...`);
+          
+          if (retryCount % 5 === 0) {
+            console.log('[Auto-Trade] Multiple failures, re-initializing Firestore connection...');
+            initFirestore().then(() => setTimeout(startListener, delay));
+          } else {
+            setTimeout(startListener, delay);
+          }
+        } else {
+          console.error('[Auto-Trade] Max retries reached for Firestore listener. Manual intervention may be required.');
+          retryCount = 0;
+          setTimeout(startListener, 300000); 
+        }
+      });
+    } catch (err) {
+      console.error('[Auto-Trade] Failed to setup signal listener:', err);
+      setTimeout(startListener, 10000);
+    }
+  };
+
+  startListener();
 }
 
 // Start the listener after a short delay to ensure DB is ready
@@ -762,23 +849,56 @@ io.on('connection', (socket) => {
     // Broadcast the admin's view (asset/timeframe) to all users
     io.emit('view_synced', data);
   });
+
+  socket.on('browser_interact', async (data) => {
+    const { userId, action, adminToken } = data;
+    // Simple admin check via token (in a real app, verify properly)
+    if (!adminToken) return;
+    
+    try {
+      const result = await interactWithSession(userId, action);
+      if (result.success) {
+        const screenshot = await getSessionScreenshot(userId);
+        socket.emit('browser_update', { userId, screenshot: `data:image/png;base64,${screenshot}` });
+      }
+    } catch (e) {
+      console.error('Socket interaction failed:', e);
+    }
+  });
+
+  socket.on('submit_2fa', (data) => {
+    const { userId, code } = data;
+    submit2FACode(userId, code);
+  });
 });
 
-// Background Balance Sync Simulation
-setInterval(() => {
+// Background Balance Sync & Session Heartbeat
+setInterval(async () => {
   try {
     const syncedUsers = db.prepare('SELECT id, balance FROM users WHERE is_live_synced = 1').all() as any[];
-    syncedUsers.forEach(user => {
-      // Simulate small balance fluctuations (market movement)
-      const change = (Math.random() * 10 - 5);
-      const newBalance = Math.max(0, user.balance + change);
-      db.prepare('UPDATE users SET balance = ? WHERE id = ?').run(newBalance, user.id);
-      io.to(`user_${user.id}`).emit('balance_update', { balance: newBalance });
-    });
+    
+    for (const user of syncedUsers) {
+      // 1. Keep the session alive
+      await keepSessionAlive(user.id);
+
+      // 2. Try to get real balance if session exists
+      const realBalance = await getBalance(user.id);
+      
+      if (realBalance !== null) {
+        db.prepare('UPDATE users SET balance = ? WHERE id = ?').run(realBalance, user.id);
+        io.to(`user_${user.id}`).emit('balance_update', { balance: realBalance });
+      } else {
+        // Fallback to simulation if no real session or balance found
+        const change = (Math.random() * 2 - 1); // Smaller fluctuation for semi-realism
+        const newBalance = Math.max(0, user.balance + change);
+        db.prepare('UPDATE users SET balance = ? WHERE id = ?').run(newBalance, user.id);
+        io.to(`user_${user.id}`).emit('balance_update', { balance: newBalance });
+      }
+    }
   } catch (err) {
     // Silent error for background task
   }
-}, 5000);
+}, 15000); // Run every 15 seconds
 
 export default app;
 

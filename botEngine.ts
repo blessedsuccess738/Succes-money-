@@ -2,9 +2,20 @@ import puppeteer from 'puppeteer';
 
 // In-memory store for active browser sessions
 const activeSessions = new Map<string, any>();
+const pending2FA = new Map<string, (code: string) => void>();
 
 export function getActiveSessions() {
   return Array.from(activeSessions.keys());
+}
+
+export function submit2FACode(userId: string, code: string) {
+  const resolve = pending2FA.get(userId);
+  if (resolve) {
+    resolve(code);
+    pending2FA.delete(userId);
+    return true;
+  }
+  return false;
 }
 
 export async function getSessionScreenshot(userId: string): Promise<string | null> {
@@ -68,6 +79,55 @@ export async function connectToPocketOption(userId: string, email: string, passw
     log(`Clicking login button...`);
     await page.click('button[type="submit"]');
 
+    // Check for 2FA or Email Verification
+    log(`Checking for 2FA or verification requirements...`);
+    
+    // Give it a moment to load the next state
+    await new Promise(resolve => setTimeout(resolve, 3000));
+
+    const needs2FA = await page.evaluate(() => {
+      const text = document.body.innerText.toLowerCase();
+      return text.includes('verification code') || 
+             text.includes('2fa') || 
+             text.includes('check your email') ||
+             !!document.querySelector('input[name="code"]');
+    });
+
+    if (needs2FA) {
+      log(`2FA/Verification detected. Waiting for user input...`);
+      if (onLog) onLog('REQUIRE_2FA'); // Special signal for the server/frontend
+
+      // Wait for the code to be submitted via submit2FACode
+      const code = await new Promise<string>((resolve) => {
+        pending2FA.set(userId, resolve);
+        // Timeout after 2 minutes if no code provided
+        setTimeout(() => {
+          if (pending2FA.has(userId)) {
+            pending2FA.delete(userId);
+            resolve('');
+          }
+        }, 120000);
+      });
+
+      if (!code) {
+        throw new Error('2FA timeout or cancelled');
+      }
+
+      log(`Entering 2FA code...`);
+      const codeInput = await page.$('input[name="code"], input[type="text"]');
+      if (codeInput) {
+        await codeInput.type(code);
+        await page.keyboard.press('Enter');
+      } else {
+        // Fallback: try to find any visible input if the specific one isn't found
+        await page.keyboard.type(code);
+        await page.keyboard.press('Enter');
+      }
+
+      log(`Waiting for navigation after 2FA...`);
+      await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => log('2FA Navigation timeout...'));
+    }
+
     log(`Waiting for successful login navigation...`);
     // Wait for navigation to the trading cabinet
     await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => log('Navigation timeout, checking DOM state...'));
@@ -105,10 +165,41 @@ export async function getBalance(userId: string): Promise<number | null> {
       const numericBalance = parseFloat(balanceText.replace(/[^0-9.]/g, ''));
       return isNaN(numericBalance) ? null : numericBalance;
     }
+    
+    // Fallback: try to find any text that looks like a balance ($XX.XX)
+    const fallbackBalance = await session.page.evaluate(() => {
+      const bodyText = document.body.innerText;
+      const match = bodyText.match(/\$\s?([0-9,]+\.[0-9]{2})/);
+      return match ? match[1] : null;
+    });
+    
+    if (fallbackBalance) {
+      return parseFloat(fallbackBalance.replace(/,/g, ''));
+    }
+
     return null;
   } catch (e) {
     console.error(`Failed to get balance for ${userId}:`, e);
     return null;
+  }
+}
+
+export async function keepSessionAlive(userId: string) {
+  const session = activeSessions.get(userId);
+  if (!session || !session.page) return;
+
+  try {
+    const { page } = session;
+    // Perform a small mouse move or scroll to simulate activity
+    await page.mouse.move(Math.random() * 100, Math.random() * 100);
+    // Occasionally refresh the cabinet page if we've been idle too long
+    if (Date.now() - session.lastActive > 300000) { // 5 minutes
+      console.log(`[Bot Engine] Refreshing session for ${userId} to prevent timeout...`);
+      await page.goto('https://pocketoption.com/en/cabinet/', { waitUntil: 'networkidle2' });
+      session.lastActive = Date.now();
+    }
+  } catch (e) {
+    console.error(`Keep-alive failed for ${userId}:`, e);
   }
 }
 
@@ -209,4 +300,26 @@ export async function disconnectPocketOption(userId: string) {
     }
   }
   return { success: true }; // Already disconnected
+}
+
+export async function interactWithSession(userId: string, action: { type: 'click' | 'type' | 'scroll', x?: number, y?: number, text?: string, deltaY?: number }) {
+  const session = activeSessions.get(userId);
+  if (!session || !session.page) throw new Error('No active session');
+
+  const { page } = session;
+  session.lastActive = Date.now();
+
+  try {
+    if (action.type === 'click' && action.x !== undefined && action.y !== undefined) {
+      await page.mouse.click(action.x, action.y);
+    } else if (action.type === 'type' && action.text !== undefined) {
+      await page.keyboard.type(action.text);
+    } else if (action.type === 'scroll' && action.deltaY !== undefined) {
+      await page.mouse.wheel({ deltaY: action.deltaY });
+    }
+    return { success: true };
+  } catch (e: any) {
+    console.error(`Interaction failed for ${userId}:`, e.message);
+    return { success: false, error: e.message };
+  }
 }

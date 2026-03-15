@@ -2,6 +2,7 @@ import { useState, useEffect, FormEvent, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Shield, Users, Activity, Key, Settings, LogOut, ExternalLink, MessageSquare, Share2, LayoutDashboard, Globe, Power, Trash2, Crown, Ban, CheckCircle2, TrendingUp, TrendingDown, Terminal, Camera, RefreshCw } from 'lucide-react';
 import Notifications from '../../components/Notifications';
+import RemoteBrowser from '../../components/RemoteBrowser';
 import { auth, db, handleFirestoreError, OperationType } from '../../firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { collection, query, getDocs, addDoc, orderBy, limit, getDoc, doc, serverTimestamp, onSnapshot, where, updateDoc, deleteDoc, setDoc } from 'firebase/firestore';
@@ -831,37 +832,46 @@ export default function AdminDashboard() {
             </div>
           )}
 
-          {/* BROWSER TAB (Legacy Pocket Option View) */}
+          {/* BROWSER TAB (Remote Puppeteer View) */}
           {activeTab === 'browser' && (
-            <div className="h-full w-full flex flex-col bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
-              <div className="bg-slate-800 p-3 flex items-center justify-between border-b border-slate-700">
-                <div className="flex items-center gap-4">
-                  <div className="flex items-center gap-2 bg-slate-700 px-3 py-1 rounded-md">
-                    <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
-                    <span className="text-xs font-medium text-slate-300">Live Connection</span>
-                  </div>
+            <div className="h-full flex flex-col gap-4">
+              <div className="flex items-center justify-between bg-slate-900 p-4 rounded-xl border border-slate-800">
+                <div>
+                  <h3 className="text-white font-semibold">Remote Browser View</h3>
+                  <p className="text-xs text-slate-500">Interact with active user sessions in real-time.</p>
                 </div>
-                <div className="flex items-center gap-2">
-                  <a 
-                    href="https://pocketoption.com/en/cabinet/demo-quick-high-low/" 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-2 bg-indigo-500 hover:bg-indigo-600 text-white px-3 py-1.5 rounded-md text-xs font-medium transition-all"
+                <div className="flex items-center gap-3">
+                  <select 
+                    value={selectedSession || ''} 
+                    onChange={(e) => setSelectedSession(e.target.value)}
+                    className="bg-slate-800 border border-slate-700 text-white text-sm rounded-lg px-3 py-2 outline-none focus:border-indigo-500"
                   >
-                    <ExternalLink className="w-3.5 h-3.5" />
-                    Open Full Browser
-                  </a>
+                    <option value="">Select a Session</option>
+                    {activeSessions.map(id => (
+                      <option key={id} value={id}>User: {id.substring(0, 8)}...</option>
+                    ))}
+                  </select>
+                  <button 
+                    onClick={fetchBotSessions}
+                    className="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-400 transition-colors"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
-              <div className="flex-1 relative bg-white">
-                <iframe 
-                  id="po-frame"
-                  src="https://pocketoption.com/en/cabinet/demo-quick-high-low/" 
-                  className="w-full h-full border-0"
-                  title="Pocket Option"
-                  allow="camera; microphone; clipboard-read; clipboard-write; display-capture; fullscreen"
-                  sandbox="allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts allow-top-navigation-by-user-activation"
-                />
+
+              <div className="flex-1 min-h-0">
+                {selectedSession ? (
+                  <RemoteBrowser 
+                    userId={selectedSession} 
+                    adminToken={localStorage.getItem('admin_token') || ''} 
+                  />
+                ) : (
+                  <div className="h-full flex flex-col items-center justify-center bg-slate-900 rounded-xl border border-slate-800 border-dashed text-slate-500">
+                    <Globe className="w-12 h-12 mb-4 opacity-20" />
+                    <p>Select an active session to start remote browsing</p>
+                  </div>
+                )}
               </div>
             </div>
           )}

@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { CheckCircle2, ChevronRight, ExternalLink, Loader2, ShieldCheck, User } from 'lucide-react';
+import { CheckCircle2, ChevronRight, ExternalLink, Loader2, ShieldCheck, User, Key } from 'lucide-react';
 import { auth, db } from '../firebase';
 import { doc, updateDoc } from 'firebase/firestore';
+import { io } from 'socket.io-client';
+
+const socket = io();
 
 interface PocketOptionOnboardingProps {
   user: any;
@@ -16,6 +19,8 @@ export default function PocketOptionOnboarding({ user, onComplete }: PocketOptio
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [affiliateLink, setAffiliateLink] = useState('https://pocketoption.com/register');
+  const [show2FA, setShow2FA] = useState(false);
+  const [twoFACode, setTwoFACode] = useState('');
 
   useEffect(() => {
     fetch('/api/public/settings')
@@ -26,7 +31,27 @@ export default function PocketOptionOnboarding({ user, onComplete }: PocketOptio
         }
       })
       .catch(console.error);
-  }, []);
+
+    // Listen for 2FA requirement
+    socket.on('require_2fa', (data) => {
+      if (data.userId === user.uid) {
+        setShow2FA(true);
+        setLoading(false);
+      }
+    });
+
+    return () => {
+      socket.off('require_2fa');
+    };
+  }, [user.uid]);
+
+  const handleSubmit2FA = () => {
+    if (twoFACode.length >= 4) {
+      socket.emit('submit_2fa', { userId: user.uid, code: twoFACode });
+      setShow2FA(false);
+      setLoading(true);
+    }
+  };
 
   const handleCreateAccount = () => {
     // Open Pocket Option in a built-in browser (iframe modal)
@@ -109,8 +134,36 @@ export default function PocketOptionOnboarding({ user, onComplete }: PocketOptio
         </div>
 
         {/* Content */}
-        <div className="p-8 flex-1 flex flex-col justify-center min-h-[400px]">
+        <div className="p-8 flex-1 flex flex-col justify-center min-h-[400px] relative">
           
+          {show2FA && (
+            <div className="absolute inset-0 z-10 bg-slate-800 flex flex-col items-center justify-center p-8 text-center animate-in fade-in zoom-in duration-300">
+              <div className="w-20 h-20 bg-amber-500/20 rounded-full flex items-center justify-center mb-6 border border-amber-500/30">
+                <Key className="w-10 h-10 text-amber-400" />
+              </div>
+              <h3 className="text-2xl font-bold text-white mb-2">Verification Required</h3>
+              <p className="text-slate-400 mb-6 max-w-xs">
+                Pocket Option has sent a verification code to your email. Please enter it below to continue.
+              </p>
+              <div className="w-full max-w-xs space-y-4">
+                <input
+                  type="text"
+                  value={twoFACode}
+                  onChange={(e) => setTwoFACode(e.target.value)}
+                  placeholder="Enter 6-digit code"
+                  className="w-full bg-slate-900 border border-slate-600 rounded-xl py-4 px-4 text-center text-2xl font-mono tracking-[0.5em] focus:outline-none focus:border-emerald-500 transition-colors text-white"
+                  maxLength={6}
+                />
+                <button
+                  onClick={handleSubmit2FA}
+                  className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-4 rounded-xl shadow-lg shadow-emerald-500/20 transition-all"
+                >
+                  Verify & Continue
+                </button>
+              </div>
+            </div>
+          )}
+
           {step === 1 && (
             <div className="text-center space-y-6 animate-in fade-in zoom-in duration-300">
               <div className="w-24 h-24 bg-indigo-500/20 rounded-full flex items-center justify-center mx-auto border border-indigo-500/30">
