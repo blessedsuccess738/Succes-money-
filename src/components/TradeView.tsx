@@ -1,10 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 import { TrendingUp, TrendingDown, Clock, ArrowUpCircle, ArrowDownCircle, MonitorPlay, LineChart } from 'lucide-react';
+import UserRemoteBrowser from './UserRemoteBrowser';
 
 interface TradeViewProps {
   asset: string;
   timeframe: string;
   signal: any;
+  token: string;
+  userId: string;
 }
 
 declare global {
@@ -13,7 +16,7 @@ declare global {
   }
 }
 
-export default function TradeView({ asset, timeframe, signal }: TradeViewProps) {
+export default function TradeView({ asset, timeframe, signal, token, userId }: TradeViewProps) {
   const [price, setPrice] = useState(1.05432);
   const [direction, setDirection] = useState<'up' | 'down'>('up');
   const [countdown, setCountdown] = useState<number | null>(null);
@@ -177,32 +180,12 @@ export default function TradeView({ asset, timeframe, signal }: TradeViewProps) 
           <div id="tradingview_widget" ref={container} className="w-full h-full" />
         ) : (
           <div className="w-full h-full bg-slate-900 relative">
-            <iframe 
-              src={affiliateLink} 
-              className="w-full h-full border-0 absolute inset-0"
-              title="Pocket Option Broker"
-              sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
-            />
-            <div className="absolute top-4 left-4 right-4 bg-amber-500/10 border border-amber-500/20 text-amber-400 p-3 rounded-xl text-xs text-center backdrop-blur-md">
-              Note: If the broker view is blank, Pocket Option may be blocking embedded browsers. Use the Pro Chart instead.
-            </div>
+            <UserRemoteBrowser token={token} userId={userId} />
           </div>
         )}
         
-        {/* Manual Trading Buttons Overlay */}
-        <div className="absolute bottom-6 right-6 flex gap-4 z-40">
-          <button className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-4 px-10 rounded-xl shadow-[0_0_30px_rgba(16,185,129,0.3)] transition-all flex items-center gap-3 text-xl border-2 border-emerald-400/50 hover:scale-105 active:scale-95">
-            <ArrowUpCircle className="w-8 h-8" />
-            BUY
-          </button>
-          <button className="bg-rose-500 hover:bg-rose-600 text-white font-bold py-4 px-10 rounded-xl shadow-[0_0_30px_rgba(244,63,94,0.3)] transition-all flex items-center gap-3 text-xl border-2 border-rose-400/50 hover:scale-105 active:scale-95">
-            <ArrowDownCircle className="w-8 h-8" />
-            SELL
-          </button>
-        </div>
-
         {/* On-Chart Signal Overlay (HUD) */}
-        {signal && countdown !== null && (
+        {signal && (
           <div className="absolute inset-0 z-50 flex items-center justify-center pointer-events-none bg-slate-900/40 backdrop-blur-sm">
             <div className={`px-12 py-8 rounded-3xl border-4 flex flex-col items-center gap-4 shadow-[0_0_100px_rgba(0,0,0,0.5)] animate-in zoom-in duration-500 ${
               signal.signal === 'Buy' 
@@ -220,7 +203,7 @@ export default function TradeView({ asset, timeframe, signal }: TradeViewProps) 
 
               <div className="mt-4 text-xl font-bold text-white bg-black/30 px-6 py-2 rounded-full flex items-center gap-2 border border-white/10">
                 <Clock className="w-5 h-5 text-emerald-400" />
-                Expires in {countdown}s
+                Expires in {countdown || timeframe}
               </div>
             </div>
           </div>

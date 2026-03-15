@@ -635,6 +635,39 @@ app.post('/api/signals/generate', authenticateToken, (req: any, res) => {
   res.json(newSignal);
 });
 
+app.get('/api/user/bot/screenshot', authenticateToken, async (req: any, res) => {
+  try {
+    const screenshot = await getSessionScreenshot(req.user.id);
+    if (screenshot) {
+      res.json({ success: true, image: `data:image/png;base64,${screenshot}` });
+    } else {
+      res.json({ success: false, message: 'No active session' });
+    }
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to get screenshot' });
+  }
+});
+
+app.post('/api/user/bot/interact', authenticateToken, async (req: any, res) => {
+  try {
+    const { action } = req.body;
+    const result = await interactWithSession(req.user.id, action);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/user/bot/submit-2fa', authenticateToken, (req: any, res) => {
+  try {
+    const { code } = req.body;
+    const success = submit2FACode(req.user.id, code);
+    res.json({ success });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Notifications Routes
 app.get('/api/notifications', authenticateToken, (req: any, res) => {
   let notifications;

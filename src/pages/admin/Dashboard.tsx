@@ -32,6 +32,7 @@ export default function AdminDashboard() {
   const [sendingBroadcast, setSendingBroadcast] = useState(false);
   
   const [currentUser, setCurrentUser] = useState<any>(null);
+  const [adminToken, setAdminToken] = useState<string | null>(null);
   const navigate = useNavigate();
 
   // Bot Console State
@@ -41,6 +42,30 @@ export default function AdminDashboard() {
   const [screenshot, setScreenshot] = useState<string | null>(null);
   const [screenshotLoading, setScreenshotLoading] = useState(false);
   const logsEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        try {
+          const token = await firebaseUser.getIdToken();
+          setAdminToken(token);
+          const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+          const userData = userDoc.data();
+          if (userData?.role === 'admin' || firebaseUser.email === 'blessedsuccess738@gmail.com') {
+            setCurrentUser({ ...userData, uid: firebaseUser.uid });
+          } else {
+            navigate('/admin/login');
+          }
+        } catch (error) {
+          handleFirestoreError(error, OperationType.GET, 'users/' + firebaseUser.uid);
+        }
+      } else {
+        navigate('/admin/login');
+      }
+    });
+
+    return () => unsubscribeAuth();
+  }, [navigate]);
 
   useEffect(() => {
     if (logsEndRef.current) {
@@ -60,10 +85,10 @@ export default function AdminDashboard() {
   }, []);
 
   const fetchBotSessions = async () => {
+    if (!adminToken) return;
     try {
-      const token = localStorage.getItem('admin_token');
       const res = await fetch('/api/admin/bot/sessions', {
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: { 'Authorization': `Bearer ${adminToken}` }
       });
       const data = await res.json();
       if (data.sessions) setActiveSessions(data.sessions);
@@ -73,12 +98,11 @@ export default function AdminDashboard() {
   };
 
   const fetchScreenshot = async (userId: string) => {
-    if (!userId) return;
+    if (!userId || !adminToken) return;
     setScreenshotLoading(true);
     try {
-      const token = localStorage.getItem('admin_token');
       const res = await fetch(`/api/admin/bot/screenshot/${userId}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: { 'Authorization': `Bearer ${adminToken}` }
       });
       const data = await res.json();
       if (data.success) {
@@ -864,7 +888,7 @@ export default function AdminDashboard() {
                 {selectedSession ? (
                   <RemoteBrowser 
                     userId={selectedSession} 
-                    adminToken={localStorage.getItem('admin_token') || ''} 
+                    adminToken={adminToken || ''} 
                   />
                 ) : (
                   <div className="h-full flex flex-col items-center justify-center bg-slate-900 rounded-xl border border-slate-800 border-dashed text-slate-500">

@@ -36,7 +36,9 @@ export default function UserDashboard() {
   const [signal, setSignal] = useState<any>(null);
   const [liveSignals, setLiveSignals] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
-  const [user, setUser] = useState<{ username: string } | null>(null);
+  const [user, setUser] = useState<{ username: string, pocketOptionId?: string } | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
   const [showAssetDropdown, setShowAssetDropdown] = useState(false);
   const [showTimeframeDropdown, setShowTimeframeDropdown] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -46,6 +48,9 @@ export default function UserDashboard() {
     const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
         try {
+          setUserId(firebaseUser.uid);
+          const idToken = await firebaseUser.getIdToken();
+          setToken(idToken);
           const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
           const userData = userDoc.data();
           
@@ -89,6 +94,8 @@ export default function UserDashboard() {
     // Listen for live signals via Socket.io
     socket.on('new_signal', (newSignal: any) => {
       setLiveSignals(prev => [newSignal, ...prev].slice(0, 10));
+      // We no longer automatically show the signal on the chart
+      // as the user wants manual control via "Get Signal"
     });
 
     socket.on('view_synced', (data: { asset: string, timeframe: string }) => {
@@ -158,6 +165,11 @@ export default function UserDashboard() {
 
       const newSignal = await response.json();
       setSignal(newSignal);
+      
+      // Clear signal after 5 seconds as requested by user
+      setTimeout(() => {
+        setSignal(null);
+      }, 5000);
       
       // Also save to Firestore for history if needed, or just rely on the backend
       // The user asked for it to be saved to the "signals table" (SQLite)
@@ -232,7 +244,13 @@ export default function UserDashboard() {
       </header>
 
       <main className="max-w-6xl mx-auto p-6 mt-8">
-        <TradeView asset={asset} timeframe={timeframe} signal={signal} />
+        <TradeView 
+          asset={asset} 
+          timeframe={timeframe} 
+          signal={signal} 
+          token={token || ''}
+          userId={userId || ''}
+        />
 
         <div className="grid lg:grid-cols-3 gap-8">
           <div className="lg:col-span-2 space-y-8">
